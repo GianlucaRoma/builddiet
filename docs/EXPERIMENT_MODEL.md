@@ -103,32 +103,62 @@ If the check fails, each failing item is excluded in turn and the knapsack is so
 * **Full copies.** Each analysis, and each joint check that runs anything, copies the whole project.
 * **Timing.** Costs come from a single measured run.
 
+## The three options (LEGGERO / NORMALE / ESTREMO)
+
+This is the everyday interface: `analyze <folder>`, `plan <folder>` and `reclaim <folder>` present these options, and `watch` proposes one of them. Nobody types an amount.
+
+**Eligible items:** PROVEN, byte-identical (`identity == identical`), still on disk, and neither protected nor excluded. Workflow outputs that differ on every run are never offered.
+
+**Placement** of an eligible item `i` with measured rebuild time `t(i)` (`options.TierRule`):
+
+```
+LEGGERO  if i is restored by copying existing bytes (duplicate, archive, git)  or  t(i) <= light_max
+NORMALE  if t(i) <= normal_max
+ESTREMO  otherwise
+defaults: light_max = 1s, normal_max = 5m  (--light-max, --normal-max; always printed with the options)
+```
+
+**Options** are cumulative: `LEGGERO = {i : tier(i) = LEGGERO}`, `NORMALE = LEGGERO ∪ {tier = NORMALE}`, `ESTREMO = everything eligible`. For each option and each project:
+
+1. Verify the whole set jointly.
+2. If that fails, retry without one item at a time, smallest first, up to `--max-attempts` sets.
+3. The first set that passes is the option for that project. The items left out are listed with the reason.
+4. A fatal failure (for example out of disk space) leaves the project out of that option.
+
+`frees` is the sum of the bytes. `rebuild` is the sum of the individual measured rebuild times (the joint check also measures the actual joint time). NORMALE is the recommended option; if it is empty and LEGGERO is not, LEGGERO is.
+
 ## Automatic mode (`watch`) and deletion (`reclaim`)
 
 `watch DIR` runs cycles (default every 10 minutes):
 
-1. **Discover** the projects under `DIR`: folders with `.git`, `.builddiet`, `package.json`, `pyproject.toml`, `Cargo.toml`, `CMakeLists.txt`, `Makefile`, `go.mod`, `*.sln`, `*.uproject`, ... Nested projects are not listed twice.
-2. **Refresh the market.** Analyze projects with no analysis or a stale one. Sandboxes go to the local drive with the most free space. Discovered recipes run unattended only with `--allow-recipes`; otherwise the analysis uses hash proofs only.
-3. **Measure free space** on the watched drive and pick a level:
+1. **Discover** the projects under `DIR`: folders with `.git`, `.builddiet`, `package.json`, `pyproject.toml`, `Cargo.toml`, `CMakeLists.txt`, `Makefile`, `go.mod`, `*.sln`, `*.uproject`, ... Nested projects are not listed twice. Protected and excluded folders are neither listed nor entered.
+2. **Refresh** analyses that are missing or stale. Sandboxes go to the local drive with the most free space. Discovered recipes run unattended only with `--allow-recipes`.
+3. **Measure free space** and pick a level:
 
-| Level | Condition (defaults) | Budget |
+| Level | Condition (defaults) | Options that may be proposed |
 |---|---|---|
 | ok | ≥ 15% free | - |
-| prepare | < 15% | `--max-penalty` (5m) |
-| reclaim | < 10% | `--max-penalty` |
-| aggressive | < 5% | `--aggressive-max-penalty` (1h) |
+| prepare | < 15% | LEGGERO, NORMALE (computed and reported, never deleted) |
+| reclaim | < 10% | LEGGERO, NORMALE |
+| aggressive | < 5% | LEGGERO, NORMALE, ESTREMO |
 
-4. **Plan and verify.** The target is the space needed to get back to `--keep-free` (20%). If the cheapest plan for it exceeds the budget, the target shrinks to what fits the budget. The plan is jointly verified, and only byte-identical items are considered.
+4. **Propose** the smallest allowed option that frees what is needed to get back to `--keep-free` (20%). If none is enough, propose the largest allowed one.
 5. **Act.**
-   * `prepare` only reports.
-   * `reclaim` and `aggressive` ask, via a desktop dialog (`--no-dialog` to skip it) or the terminal. `--auto` acts without asking.
-   * An unanswered question is a "no".
+   * `reclaim` and `aggressive` ask, via a desktop dialog or the terminal. An unanswered question is a "no".
+   * With `--auto`, the proposal is reclaimed without asking only if it is not above `--auto-max` (default NORMALE); otherwise `watch` asks.
 
-`reclaim` then, per project:
+`reclaim`, per project:
 
-* refuses if the analysis is stale;
-* re-hashes every item and requires the signature recorded when it was proven;
-* re-checks level-0 sources;
-* deletes, and logs each deletion before the next one.
+* refuses if the analysis is stale, or if the project, an item or a recovery source is protected or excluded;
+* re-hashes every item against its proven signature;
+* **writes the restore record before deleting**, and deletes nothing if the record cannot be written.
 
 `restore` brings items back in dependency order (copies, archives and git first, then recipes, then the workflow), in two passes. It then checks the bytes and reports any other file a declared workflow rewrote.
+
+## Running out of disk space
+
+* **Copying a project into a sandbox:** `ENOSPC` / `ERROR_DISK_FULL` becomes `OutOfSpace`, with the message "out of disk space in X while ... Nothing in your project was changed or deleted".
+* **A failed run on a drive with less than 16 MB free:** also `OutOfSpace`, because the failure says nothing about the project and must not become a verdict.
+* **`analyze`:** fails explicitly. When analyzing a folder of projects, that project is skipped and listed.
+* **Joint verification:** returns a fatal, explicit result, so the option is not verified. It is never reported as verified.
+* **Before copying:** a free-space check (project size × 1.1 + 32 MB) refuses early (`--sandbox-dir` to use another drive).

@@ -87,3 +87,18 @@ The gate was re-run from scratch after protected paths were added. `BUILDDIET_HO
 * **Restore reports workflow side effects**, instead of silently leaving other files changed.
 * **Labels.** `watch` and `market` show paths relative to the watched folder: both projects are named `workspace`.
 * **Planner.** A plan that exactly fills the target could be lost to size rounding, and a costlier item was added. The planner now never returns a plan costlier than the greedy one, and `watch` refuses any plan above its budget.
+
+## Final gate: `watch` with the three options
+
+Re-run from scratch on the real D: drive (3.9% free, "aggressive"). The setup was: `ml/workspace/models` protected (given as `ML\...`), `corpus/workspace/cache` excluded with `--exclude`, and a gate-only `BUILDDIET_HOME`.
+
+* **Cycle 1: `--auto`, default boundaries.**
+  * 201.5 GB were needed; the three options were identical (4.2 MB, 5 items, all PASS). The proposal was LEGGERO, the smallest of the equal options.
+  * Within `--auto-max NORMALE`, so it was reclaimed automatically: 5 items.
+  * `models` and `cache` were untouched.
+* **Restore:** all 5 items came back byte-identical.
+* **Cycle 3: `--auto`, with declared boundaries `--light-max 0.05s --normal-max 0.3s`.**
+  * The options were LEGGERO 3.0 MB, NORMALE 3.0 MB and ESTREMO 4.2 MB, and ESTREMO was proposed (the disk is critical).
+  * The log said "ESTREMO is above --auto-max NORMALE: asking instead", and with nobody to answer, **nothing was deleted**.
+* **Cycle 4: the same with `--auto-max estremo`.** ESTREMO was reclaimed (5 items, 4.2 MB).
+* **Restore:** everything came back byte-identical. Of 56 files, the only difference is the stale `weights.q8`, refreshed by the declared build and reported by `restore`. No sandbox was left behind.

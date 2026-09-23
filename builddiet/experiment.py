@@ -37,7 +37,7 @@ from .config import CONFIG_DIR, Config
 from .cost import rebuild_penalty
 from .model import IN_GIT, INCONCLUSIVE, NOT_REGENERATED, PROVEN, REQUIRED, STALE, UNTESTED
 from .planner import JointCheck
-from .sandbox import Sandbox, default_sandbox_base
+from .sandbox import OutOfSpace, Sandbox, default_sandbox_base, is_out_of_space, out_of_space
 from .protect import Guard
 from .scanner import CANDIDATE, EXCLUDED, LINK, PROTECTED, STATUS_DETAIL, USER_EXCLUDED, scan
 from .units import format_duration, format_size, shorten
@@ -117,8 +117,31 @@ def _tail(path: Path) -> str:
         return ""
 
 
+_MIN_SANDBOX_FREE = 16 << 20
+
+
+def _space_guard(cwd: Path, res: "RunResult", doing: str) -> "RunResult":
+    """A failed run on a (nearly) full drive says nothing about the project: raise instead."""
+    if not res.ok:
+        try:
+            if shutil.disk_usage(str(cwd)).free < _MIN_SANDBOX_FREE:
+                raise out_of_space(cwd, doing)
+        except OSError:
+            pass
+    return res
+
+
 def run_workflow(cfg: Config, cwd: Path, log_path: Path, env: Optional[dict] = None) -> RunResult:
     """Run regenerate then verify in ``cwd``. Output goes to ``log_path``."""
+    try:
+        return _space_guard(cwd, _run_workflow(cfg, cwd, log_path, env), "running " + (cfg.regenerate or cfg.verify or ""))
+    except OSError as exc:
+        if is_out_of_space(exc):
+            raise out_of_space(cwd, "writing the run log") from exc
+        raise
+
+
+def _run_workflow(cfg: Config, cwd: Path, log_path: Path, env: Optional[dict] = None) -> RunResult:
     steps = [(n, c) for n, c in (("regenerate", cfg.regenerate), ("verify", cfg.verify)) if c]
     start = time.perf_counter()
     deadline = start + cfg.timeout
@@ -165,9 +188,10 @@ def _check_space(total: int, sandbox_dir: Optional[Path], force: bool) -> None:
     free = shutil.disk_usage(str(base)).free
     needed = int(total * 1.1) + (32 << 20)
     if free < needed and not force:
-        raise AnalysisError(
-            f"the sandbox needs about {format_size(needed)} but only {format_size(free)} "
-            f"is free in {base}; use --sandbox-dir on another drive or --force"
+        raise OutOfSpace(
+            f"not enough disk space in {base} for a sandbox: it needs about {format_size(needed)} "
+            f"but only {format_size(free)} is free. Nothing in your project was changed or deleted. "
+            "Free some space there, or use --sandbox-dir on a drive with room."
         )
 
 
@@ -235,6 +259,17 @@ def verify_joint(
     if any(e.get("method") != "recipe" for e in rebuilt) and not workflow:
         return JointCheck(False, "the workflow these items were proven with is no longer configured", fatal=True)
 
+    try:
+        return _verify_joint_in_sandbox(root, cfg, entries, paths, inside_plan, restored, rebuilt,
+                                        total_bytes, sandbox_dir, force, log, guard)
+    except (OutOfSpace, AnalysisError) as exc:
+        return JointCheck(False, f"joint verification could not run: {exc}", fatal=True)
+
+
+def _verify_joint_in_sandbox(root, cfg, entries, paths, inside_plan, restored, rebuilt,
+                             total_bytes, sandbox_dir, force, log, guard) -> JointCheck:
+    workflow = bool(cfg.regenerate or cfg.verify)
+    recipe_items = [e for e in rebuilt if e.get("method") == "recipe"]
     _check_space(total_bytes, sandbox_dir, force)
     original_before = snapshot(root, skip_top=(CONFIG_DIR,), guard=guard)
     env = _workflow_env()

@@ -280,3 +280,73 @@ def render_scan(manifests_with_state, unanalyzed=()) -> str:
     lines += ["", f"  Provably reclaimable across projects: {format_size(grand[BUCKET_REGENERABLE])}",
               "  Next: builddiet plan --free <SIZE> <dir>"]
     return "\n".join(lines)
+
+
+def _items_summary(option) -> str:
+    words = {"copies": ("copy", "copies"), "archives": ("archive", "archives"), "recipes": ("recipe", "recipes"),
+             "workflow": ("workflow output", "workflow outputs"), "git": ("git file", "git files")}
+    parts = [f"{n} {words.get(k, (k, k))[0 if n == 1 else 1]}"
+             for k, n in sorted(option.breakdown().items(), key=lambda kv: -kv[1])]
+    return f"{len(option.items)}" + (f": {', '.join(parts)}" if parts else "")
+
+
+def render_options(options, *, where: str, projects: int, skipped=(), protected=(), excluded=(),
+                   rule=None, details: bool = False) -> str:
+    """LEGGERO / NORMALE / ESTREMO, with how each item was placed."""
+    lines = [f"BUILDDIET - what {where} can give back", ""]
+    context = [f"{projects} project{'s' if projects != 1 else ''} analyzed"]
+    if protected:
+        context.append(f"{len(protected)} protected path{'s' if len(protected) != 1 else ''} left out")
+    if excluded:
+        context.append(f"{len(excluded)} excluded for this run")
+    if skipped:
+        context.append(f"{len(skipped)} skipped")
+    lines += ["  " + " | ".join(context), ""]
+    rows = []
+    for o in options:
+        if o.items:
+            joint = "PASS" + (f" ({len(o.dropped)} left out)" if o.dropped else "")
+        else:
+            joint = "-" if not o.dropped else "FAIL"
+        rows.append([o.name + ("  <- recommended" if o.recommended else ""), format_size(o.freed),
+                     format_duration(o.rebuild_seconds) if o.items else "-", _items_summary(o), joint])
+    lines.append(table(rows, ["option", "frees", "rebuild", "items", "joint verification"], right=(1, 2)))
+
+    previous: set = set()
+    for o in options:
+        added = [i for i in o.items if (i.root, i.path) not in previous]
+        previous |= {(i.root, i.path) for i in o.items}
+        if not added and not o.dropped:
+            continue
+        lines += ["", f"{o.name}" + (" adds:" if o.name != "LEGGERO" else ":")]
+        shown = added if details else sorted(added, key=lambda i: -i.bytes)[:8]
+        for i in sorted(shown, key=lambda i: -i.bytes):
+            label = i.path if len({x.root for x in o.items}) <= 1 else f"{i.project}/{i.path}"
+            lines.append(f"  {shorten(label, 45):45}  {format_size(i.bytes):>9}  {format_duration(i.rebuild_seconds):>7}"
+                         f"  {shorten(i.how, 45)}")
+        if len(added) > len(shown):
+            lines.append(f"  ... and {len(added) - len(shown)} more (--details)")
+        for i, reason in o.dropped:
+            lines.append(f"  left out: {i.path}  ({shorten(reason, 80)})")
+
+    def limit(seconds: float) -> str:  # exact: a boundary the user must understand
+        return f"{seconds:g}s" if seconds < 60 else format_duration(seconds)
+
+    light = limit(rule.light_max) if rule else "1s"
+    normal = limit(rule.normal_max) if rule else "5m00s"
+    lines += [
+        "",
+        "How an item is placed (by the measured cost of getting that item back):",
+        f"  LEGGERO  restore copies bytes that already exist (copy, archive, git), or rebuild <= {light}",
+        f"  NORMALE  rebuild <= {normal}",
+        "  ESTREMO  everything proven, whatever it costs",
+        "Only items that come back byte-for-byte; each option was removed as a whole in a sandbox",
+        "and restored (joint verification). Protected and excluded paths are never included.",
+    ]
+    for p in protected:
+        lines.append(f"  protected: {p}")
+    for p in excluded:
+        lines.append(f"  excluded:  {p}")
+    for s in skipped:
+        lines.append(f"  skipped:   {s}")
+    return "\n".join(lines)

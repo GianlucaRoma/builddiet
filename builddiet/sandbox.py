@@ -23,6 +23,30 @@ class SandboxError(RuntimeError):
     pass
 
 
+class OutOfSpace(SandboxError):
+    """A sandbox ran out of disk space. Nothing in the user's project was changed."""
+
+
+def is_out_of_space(exc: BaseException) -> bool:
+    import errno
+
+    return isinstance(exc, OSError) and (
+        exc.errno == errno.ENOSPC or getattr(exc, "winerror", None) in (39, 112)  # ERROR_(HANDLE_)DISK_FULL
+    )
+
+
+def out_of_space(where, doing: str) -> OutOfSpace:
+    try:
+        free = shutil.disk_usage(str(where)).free
+        left = f"{free / 1e6:.0f} MB left"
+    except OSError:
+        left = "free space unknown"
+    return OutOfSpace(
+        f"out of disk space in {where} while {doing} ({left}). Nothing in your project was changed "
+        "or deleted. Free some space there, or pass --sandbox-dir on a drive with room."
+    )
+
+
 def is_within(child: Path, parent: Path) -> bool:
     try:
         Path(child).relative_to(parent)
@@ -130,7 +154,12 @@ class Sandbox:
                     skipped.append(n)
             return skipped
 
-        fs.copytree(source, str(self.project), ignore=ignore)
+        try:
+            fs.copytree(source, str(self.project), ignore=ignore)
+        except OSError as exc:
+            if is_out_of_space(exc):
+                raise out_of_space(self.base, "copying the project into the sandbox") from exc
+            raise
 
     def target(self, rel: str) -> Path:
         """Absolute path of ``rel`` inside the sandbox copy, with escape checks."""

@@ -12,12 +12,13 @@ import zipfile
 from collections import namedtuple
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from builddiet import cli, manifest, reclaim, workspaces
 from builddiet.config import Config
 from builddiet.experiment import analyze
 from builddiet.planner import PlanItem
-from builddiet.service import affordable_target, load_manifests, verified_plan
+from builddiet.service import load_manifests, verified_plan
 from builddiet.units import parse_duration
 from builddiet.verifier import fingerprint, signature
 from builddiet.watch import AGGRESSIVE, OK, PREPARE, RECLAIM, WatchSettings, cycle, level, value, DiskStatus
@@ -102,7 +103,7 @@ class ReclaimRestoreTest(Base):
 
     def test_cli_reclaim_needs_confirmation(self):
         out = io.StringIO()
-        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+        with redirect_stdout(out), redirect_stderr(io.StringIO()),                 mock.patch("builddiet.cli.sys.stdin", io.StringIO()):  # non-interactive
             code = cli.main(["reclaim", str(self.root), "--free", "1KB", "--sandbox-dir", str(self.sb)])
         self.assertEqual(code, 5)
         self.assertIn("Nothing deleted", out.getvalue())
@@ -124,8 +125,7 @@ def manifests_entries(root):
 
 class WatchTest(Base):
     def settings(self, **kw):
-        s = WatchSettings(min_size=1000, sandbox_dir=self.sb, dialog=False, max_penalty=60,
-                          aggressive_max_penalty=600)
+        s = WatchSettings(min_size=1000, sandbox_dir=self.sb, dialog=False)
         for k, v in kw.items():
             setattr(s, k, v)
         return s
@@ -152,7 +152,8 @@ class WatchTest(Base):
         r = self.run_cycle(8)
         self.assertEqual(r.level, RECLAIM)
         self.assertEqual(r.reclaimed, 0)
-        self.assertIn("Joint verification: PASS", r.message)
+        self.assertIn("joint verification PASS", r.message)
+        self.assertIn("Proposed:", r.message)
 
     def test_auto_reclaims_within_limits_and_can_be_restored(self):
         r = self.run_cycle(3, auto=True)
@@ -163,12 +164,22 @@ class WatchTest(Base):
         restored = reclaim.restore(self.root)
         self.assertEqual(restored.failed, [])
 
-    def test_zero_budget_reclaims_only_free_items(self):
-        r = self.run_cycle(8, auto=True, max_penalty=0.0)
-        # only items whose measured cost is 0 fit (copies / archives), never the recipe
+    def test_auto_max_leggero_reclaims_only_copies(self):
+        # light_max=0: only items restored by copying existing bytes are LEGGERO
+        # a tiny need (keep_free just above 8%): LEGGERO is enough, so LEGGERO is proposed
+        r = self.run_cycle(8, auto=True, auto_max="LEGGERO", light_max=0.0, keep_free=8.0000001)
         remaining = {p for p in self.proven if (self.root / p).exists()}
-        self.assertIn("out", remaining)
-        self.assertLessEqual(r.plan_cost, 0.0 + 1e-9)
+        self.assertEqual(remaining, {"out"})  # the recipe-made output is NORMALE
+        self.assertEqual(r.option, "LEGGERO")
+
+    def test_auto_does_not_exceed_auto_max(self):
+        # needs far more than LEGGERO frees, so NORMALE is proposed; --auto-max LEGGERO must ask
+        r = self.run_cycle(8, auto=True, auto_max="LEGGERO", light_max=0.0, keep_free=99.0,
+                           prepare_below=99.0)
+        self.assertEqual(r.option, "NORMALE")
+        self.assertEqual(r.reclaimed, 0)
+        for p in self.proven:
+            self.assertTrue((self.root / p).exists())
 
 
 class WorkflowRestoreTest(unittest.TestCase):
@@ -212,13 +223,6 @@ class UnitsTest(unittest.TestCase):
         self.assertEqual(value(item(31, 12)), "LOW")
         self.assertEqual(value(item(8, 7 * 60)), "MEDIUM")
         self.assertEqual(value(item(18, 3 * 3600)), "HIGH")
-
-    def test_affordable_target(self):
-        items = [PlanItem("p", "/p", "a", 30 * GB, 3 * 3600), PlanItem("p", "/p", "b", 12 * GB, 10),
-                 PlanItem("p", "/p", "c", 9 * GB, 15)]
-        self.assertEqual(affordable_target(items, 20 * GB, 300), 20 * GB)  # b + c: 25s
-        self.assertEqual(affordable_target(items, 40 * GB, 300), 21 * GB)  # a does not fit
-        self.assertEqual(affordable_target(items, 40 * GB, None), 40 * GB)
 
     def test_parse_duration(self):
         self.assertEqual(parse_duration("5m"), 300)

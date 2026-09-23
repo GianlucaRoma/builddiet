@@ -45,25 +45,6 @@ def project_config(m: dict) -> Config:
     return cfg.validate(require_workflow=False)
 
 
-def affordable_target(items: list, target: int, max_cost: Optional[float]) -> int:
-    """The target itself if its cheapest plan fits ``max_cost``; otherwise the most
-    bytes a cheapest-per-byte selection can free within that budget."""
-    if max_cost is None:
-        return target
-    best = solve(items, target)
-    if best.feasible and best.cost <= max_cost:
-        return target
-    freed, spent = 0, 0.0
-    for item in sorted(items, key=lambda i: i.cost / max(i.bytes, 1)):
-        if spent + item.cost > max_cost:
-            continue
-        spent += item.cost
-        freed += item.bytes
-        if freed >= target:
-            break
-    return min(freed, target)
-
-
 def verified_plan(
     manifests: list,
     target: int,
@@ -80,6 +61,16 @@ def verified_plan(
     """(PlanSearch, plan items) for ``target`` bytes across ``manifests``."""
     guard = guard if guard is not None else Guard()
     items = collect_items(manifests, strict=strict, include_git=include_git, guard=guard)
+    verify_group = joint_verifier(manifests, sandbox_dir=sandbox_dir, force=force, log=log, guard=guard)
+    if not verify:
+        return PlanSearch(target, solve(items, target)), items
+    return search_verified(items, target, verify_group, max_attempts=max_attempts), items
+
+
+def joint_verifier(manifests: list, *, sandbox_dir: Optional[Path] = None, force: bool = False,
+                   log: Callable[[str], None] = lambda _m: None, guard: Optional[Guard] = None) -> Callable:
+    """verify_group(root, plan_items) -> JointCheck, for projects in ``manifests``."""
+    guard = guard if guard is not None else Guard()
     by_root = {str(Path(m["project"])): m for m in manifests}
 
     def verify_group(root: str, group: list):
@@ -90,6 +81,16 @@ def verified_plan(
             total_bytes=m["total_bytes"], sandbox_dir=sandbox_dir, force=force, log=log, guard=guard,
         )
 
-    if not verify:
-        return PlanSearch(target, solve(items, target)), items
-    return search_verified(items, target, verify_group, max_attempts=max_attempts), items
+    return verify_group
+
+
+def reclaim_options(manifests: list, *, sandbox_dir: Optional[Path] = None, force: bool = False,
+                    include_git: bool = False, rule=None, max_attempts: int = 5,
+                    log: Callable[[str], None] = lambda _m: None, guard: Optional[Guard] = None) -> list:
+    """LEGGERO / NORMALE / ESTREMO for ``manifests``, each jointly verified."""
+    from .options import build_options
+
+    guard = guard if guard is not None else Guard()
+    verify_group = joint_verifier(manifests, sandbox_dir=sandbox_dir, force=force, log=log, guard=guard)
+    return build_options(manifests, verify_group, guard=guard, rule=rule, include_git=include_git,
+                         max_attempts=max_attempts)

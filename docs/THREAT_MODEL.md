@@ -13,6 +13,8 @@
 | A BuildDiet bug deletes the wrong original files | Only `reclaim.py` deletes outside sandboxes, and only paths of a JOINTLY VERIFIED plan. Each is normalised, checked to be inside the project and not `.builddiet/`, and re-hashed against its proven signature right before deletion. |
 | An item changes between analysis and reclaim (the user edited it) | The signature check fails and nothing in that project is deleted (`tests/test_reclaim_watch.py`). |
 | The recovery source of an item was changed or deleted | `source_unchanged` is checked at joint verification and again right before deletion. |
+| The disk fills up during a sandbox copy or verification | `OutOfSpace` stops the analysis or verification explicitly: "Nothing in your project was changed or deleted". A joint check that runs out of space is fatal, so nothing is verified and nothing is offered (`tests/test_options.py::OutOfSpaceTest`). |
+| The disk fills up during reclaim | The restore log is written *before* each deletion. If it cannot be written, that item is not deleted and reclaim stops. |
 | Deleted data turns out to be needed right away | `restore` brings it back from the logged recovery (copy / archive / git / recipe / workflow) and checks the bytes. |
 | `watch --auto` deletes too much | Only down to `--keep-free`, only within `--max-penalty` of expected rebuild, only byte-identical items. Without `--auto` it always asks. |
 | A dialog is left unanswered or the session is non-interactive | Treated as "no". |

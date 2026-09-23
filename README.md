@@ -2,14 +2,66 @@
 
 **Prove what's disposable. Keep what matters.**
 
-Point BuildDiet at your projects folder. In sandbox copies, it works out which files and directories can be brought back byte-for-byte, how, and what that costs. When the disk runs low, it frees the cheapest jointly verified set, and `restore` brings anything back.
+You don't tell BuildDiet how much to delete. Point it at your projects folder: it finds out, by experiment in sandbox copies, what can be brought back byte-for-byte, how, and at what measured cost. Then it offers three verified options.
 
 ```bash
 pip install -e .
-builddiet watch D:/Projects          # and that's it (asks before deleting anything)
+builddiet analyze D:/Projects        # finds the projects, proves what it can, shows the options
+builddiet reclaim D:/Projects        # choose LEGGERO / NORMALE / ESTREMO, confirm, done
+builddiet restore D:/Projects/app    # anything back, byte-checked
 ```
 
 > *Non indovina cosa puoi cancellare. Lo verifica.*
+
+## Three options, computed for you
+
+Real output ([BD-ZERO](docs/BD-ZERO.md): a small data/ML-shaped git repository, given only the folder):
+
+```
+$ builddiet analyze D:/builddiet-bdzero/workspace
+BUILDDIET - what D:uilddiet-bdzero\workspace can give back
+
+  option                     frees   rebuild   items                             joint verification
+  LEGGERO                   1.9 MB      0.2s   3: 1 recipe, 1 copy, 1 archive    PASS
+  NORMALE  <- recommended   2.3 MB      1.5s   4: 2 recipes, 1 copy, 1 archive   PASS
+  ESTREMO                   2.3 MB      1.5s   4: 2 recipes, 1 copy, 1 archive   PASS
+
+LEGGERO:
+  features     1.3 MB   0.0s  copy of backups/features-2026-09-01
+  cache      640.0 KB   0.2s  run: python -c "import hashlib, os; ...   (found in an agent log)
+  release     22.7 KB   0.0s  extract from dist/app-1.0.zip
+NORMALE adds:
+  models     327.7 KB   1.3s  run: python scripts/train.py
+
+$ builddiet reclaim D:/builddiet-bdzero/workspace
+Which option? [leggero / normale / estremo / nothing] normale
+NORMALE: delete 4 items and free 2.3 MB (rebuild if needed: 1.5s)? Type 'reclaim' to confirm: reclaim
+NORMALE: freed 2.3 MB (4 items).
+```
+
+(The interactive prompts of `reclaim` are shown as the code prints them; the gate itself ran the non-interactive form `--option normale --yes`, and the result line is real.)
+
+On such a small project ESTREMO adds nothing, because nothing costs more than 5 minutes to rebuild. On the BD-REAL project, with the boundaries tightened to `--light-max 0.05s --normal-max 0.5s`, the three options differ: 1.5 MB, 2.7 MB and 8.0 MB.
+
+Every item goes into an option according to the **measured cost of getting that item back**:
+
+| Option | An item belongs here if | In practice |
+|---|---|---|
+| **LEGGERO** | it is restored by copying bytes that already exist (identical copy, archive, git), or its measured rebuild takes ≤ `--light-max` (1s) | practically free |
+| **NORMALE** (recommended) | its measured rebuild takes ≤ `--normal-max` (5 min) | cheap derived data |
+| **ESTREMO** | it is PROVEN, whatever its rebuild time | everything that can provably come back |
+
+The options are nested (LEGGERO ⊆ NORMALE ⊆ ESTREMO). Each option shows:
+
+* the space it frees;
+* the measured rebuild time;
+* how many items it contains, and of which kind (copies, archives, recipes, workflow);
+* whether its **joint verification** passed: all of its items are removed together in a sandbox and must come back byte-for-byte;
+* which protected or excluded paths were left out.
+
+If an option fails its joint verification, it is retried without one item at a time, and the items left out are listed. Only items that come back byte-for-byte are ever offered.
+
+`reclaim` asks which option you want, then asks you to type `reclaim`. For scripts, use `--option normale --yes`.
 
 ## Automatic mode: `watch`
 
@@ -17,33 +69,25 @@ builddiet watch D:/Projects          # and that's it (asks before deleting anyth
 builddiet watch D:/Projects
 ```
 
-`watch` finds the projects under the folder itself (git repos, `package.json`, `pyproject.toml`, `Cargo.toml`, `.sln`, `.uproject`, ...), keeps a "market" of what each one can give back, and follows the disk:
+`watch` uses the same three options. It finds the projects under the folder (git repos, `package.json`, `pyproject.toml`, `Cargo.toml`, `.sln`, `.uproject`, ...), keeps their analyses fresh, and follows the disk:
 
 | Free space | What `watch` does |
 |---|---|
 | ≥ 15% | keeps the analyses up to date; nothing else |
-| < 15% | computes and **jointly verifies** the cheapest plan that gets back to 20% free |
-| < 10% | shows it and asks, with a desktop dialog or the terminal: *Disk space is low. BuildDiet can safely reclaim 47.3 GB. Expected worst-case rebuild cost: 2m18s. Joint verification: PASS. Reclaim?* |
-| < 5% | the same, with a larger rebuild budget |
+| < 15% | computes and jointly verifies the three options; picks the smallest that gets back to 20% free (LEGGERO or NORMALE) |
+| < 10% | proposes it, through a desktop dialog or the terminal, and waits for your yes |
+| < 5% | ESTREMO may be proposed too |
 
-With `--auto` it reclaims by itself, within the limits: `--keep-free 20`, `--max-penalty 5m`, and `--aggressive-max-penalty 1h` when the disk is critical. Sandboxes go to the local drive with the most free space, so verification still works when the watched drive is full. You can pin that location with `--sandbox-dir` or `$BUILDDIET_SANDBOX_DIR`.
-
-```
-$ builddiet market D:/Projects
-  item                              size   rebuild   value    how to get it back
-  corpus/workspace/derived/shards 1.6 MB      0.0s   LOW      your workflow
-  ml/workspace/features           1.3 MB      0.0s   LOW      copy of backups/features-2026-09-01
-  corpus/.../cache/ngrams.json    5.4 MB      0.6s   MEDIUM   your workflow
-  ml/workspace/models           327.7 KB      1.2s   HIGH     run: python scripts/train.py
-```
+With `--auto` it reclaims the proposed option by itself, but never one above `--auto-max` (default **NORMALE**); above that it asks. Sandboxes go to the local drive with the most free space, so verification still works when the watched drive is full (`--sandbox-dir` or `$BUILDDIET_SANDBOX_DIR` to pin it).
 
 **What gets deleted, and how to undo it.**
-* **Only jointly verified, byte-identical items:** only items of a JOINTLY VERIFIED plan are deleted, and only those that come back byte-for-byte (outputs with timestamps need `--allow-nondeterministic` in `reclaim`).
-* **Re-hashed right before deletion:** each item is hashed again just before it is deleted. If it isn't exactly what was proven, nothing in that project is deleted.
-* **Logged:** every deletion goes to `.builddiet/reclaimed.json`.
-* **Restorable:** `builddiet restore <project>` brings everything back and checks the hashes.
 
-Manual equivalents: `builddiet plan DIR --free 20GB` shows the plan, and `builddiet reclaim DIR --free 20GB` deletes it after you type `reclaim`.
+* Only the items of the option you chose (or `watch` proposed), jointly verified and byte-identical.
+* Each item is re-hashed right before deletion. If it isn't exactly what was proven, or if it has become protected, nothing in that project is deleted.
+* The record needed to restore an item is written *before* the item is deleted. If it cannot be written (e.g. the disk is full), nothing is deleted.
+* `builddiet restore <project>` brings everything back and checks the hashes.
+
+**Advanced / CI.** `builddiet plan DIR --free 20GB` and `builddiet reclaim DIR --free 20GB --yes` solve for a fixed amount instead: the cheapest jointly verified plan that frees at least that much. This is not the everyday path.
 
 ## Protected paths
 
@@ -111,19 +155,7 @@ IN GIT:             src/, scripts/  (restorable with git checkout; not planned b
 NOT TESTED:         reports/  (different bytes on every run: timestamped)
 ```
 
-All 12 verdicts were as expected, and identical across 3 repeated runs. The original workspace stayed byte-identical.
-
-```
-$ builddiet plan --free 2MB
-JOINTLY VERIFIED PLAN
-  cache/      640.0 KB   0.2s   run: python -c "import hashlib, os; os.makedi...
-  features/     1.3 MB   0.0s   copy of backups/features-2026-09-01
-  models/     327.7 KB   1.3s   run: python scripts/train.py
-  Frees 2.2 MB. Removed together, every item came back byte-for-byte.
-  Measured joint rebuild 1.6s; individual estimates sum to 1.5s.
-```
-
-`plan` solves a min-cost covering knapsack over the proven items. It then **removes the whole candidate plan at once** in a fresh sandbox and restores everything (copies, archives, recipes). A plan is only called verified if every item comes back byte-for-byte. If it doesn't, the next-cheapest plan is tried; if none passes, `plan` says so.
+All 12 verdicts were as expected, and identical across repeated runs. The original workspace stayed byte-identical. The options BuildDiet then offered for this workspace are shown in [docs/BD-ZERO.md](docs/BD-ZERO.md).
 
 ## Verdicts
 
@@ -141,8 +173,9 @@ JOINTLY VERIFIED PLAN
 
 * **Deletion is narrow, checked and logged.**
   * `analyze` and `plan` never delete anything of yours.
-  * `reclaim` (after you type `reclaim`) and `watch` (after you approve, or with `--auto` within your limits) delete only jointly verified, byte-identical items, each re-hashed right before deletion.
-  * Every deletion is logged, and `restore` brings it back and checks it.
+  * `reclaim` (after you choose an option and type `reclaim`) and `watch` (after you approve, or with `--auto` up to `--auto-max`) delete only jointly verified, byte-identical items, each re-hashed right before deletion.
+  * The restore record is written before each deletion, and `restore` brings items back and checks them.
+* **Running out of space is an explicit, safe failure.** If a sandbox copy or a run hits a full disk, BuildDiet stops with "out of disk space ... Nothing in your project was changed or deleted". A joint verification that cannot run makes its option unavailable, never "verified".
 * **Sandbox.** The project is copied, and every destructive step is path-checked to stay inside the copy. Absolute paths to the project in discovered commands are rewritten to point at the sandbox.
 * **You approve the commands.** Discovered recipes are listed, and nothing runs until you say yes. Dangerous categories are refused outright.
 * **Side effects disqualify.** A recipe that changes any other existing file proves nothing. From the outside, refreshing a stale output and overwriting your data look the same. The only exception is a short, explicit list of volatile files (`*.log`, `logs/`, `__pycache__/`, `*.pyc`, tool caches).
@@ -156,16 +189,19 @@ Details: [docs/SAFETY.md](docs/SAFETY.md) and [docs/THREAT_MODEL.md](docs/THREAT
 ## Options you may need
 
 ```bash
-builddiet watch DIR --auto --max-penalty 10m     # reclaim by itself, within limits
+builddiet watch DIR --auto                       # reclaim the proposed option (up to NORMALE) by itself
+builddiet watch DIR --auto --auto-max estremo     # allow ESTREMO too when it is the proposal
 builddiet watch DIR --allow-recipes --agent-logs  # let unattended analyses use discovered recipes
 builddiet market DIR                              # what every project can give back, cheapest first
-builddiet reclaim DIR --free 20GB                 # delete a verified plan now (asks first)
+builddiet reclaim DIR --option normale --yes      # non-interactive choice
+builddiet plan DIR --details                      # every item of every option
+builddiet plan DIR --light-max 5s --normal-max 30m  # move the option boundaries (always shown)
 builddiet restore PROJECT [path ...]              # bring reclaimed items back, byte-checked
 builddiet analyze DIR --sandbox-dir E:/scratch   # default: the local drive with the most free space
 builddiet analyze DIR --min-size 100MB --depth 2  # candidate granularity
 builddiet analyze DIR --agent-logs                # also learn from Codex / Claude Code sessions
 builddiet analyze DIR --no-recipes                # hash proofs only; runs nothing
-builddiet plan DIR --free 50GB --include-git
+builddiet plan DIR --free 50GB                    # advanced / CI: a fixed amount instead of options
 builddiet backup-plan DIR                         # which bytes are irreproducible
 builddiet scan C:/Projects                        # summary across analyzed projects
 builddiet init DIR                                # optional: declare build + test commands
@@ -180,7 +216,8 @@ builddiet init DIR                                # optional: declare build + te
 * **Recipes run for real** in the sandbox. External side effects (network, databases) are not contained, although the obvious categories are refused.
 * **Rebuild time is a single measured run.** For recipes it is the full run time; for a declared workflow it is the time above a warm build.
 * **Nondeterministic outputs** can only be PROVEN with a declared workflow (level 2).
-* **Joint verification is bounded** (`--max-attempts`, default 5). A verified plan is verified as a whole: if you delete only part of it, only the individual proofs cover that part.
+* **Joint verification is bounded** (`--max-attempts`, default 5, per option and project). An option is verified as a whole: if you delete only part of it by hand, only the individual proofs cover that part.
+* **Option boundaries are a choice.** 1s and 5 min are defaults, shown with every option list and changeable with `--light-max` / `--normal-max`. Within an option everything is deleted, even if you needed less.
 
 ## Related work
 

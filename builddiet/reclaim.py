@@ -129,7 +129,8 @@ def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: Non
         records = read_log(root)
         for e in entries:
             path = _target(root, e["path"])
-            force_remove(path)
+            # write-ahead: the record that allows `restore` is on disk BEFORE the deletion;
+            # if it cannot be written (e.g. disk full), nothing is deleted.
             records.append({
                 "path": e["path"], "kind": e["kind"], "bytes": e["bytes"], "signature": e["signature"],
                 "method": e.get("method"), "recipe": e.get("recipe"), "recipe_cwd": e.get("recipe_cwd", ""),
@@ -137,7 +138,13 @@ def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: Non
                 "identity": e.get("identity"),
                 "deleted_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             })
-            _write_log(root, records)  # after every deletion, so the log is never behind
+            try:
+                _write_log(root, records)
+            except OSError as exc:
+                result.refused.append((name, f"could not record the deletion of {e['path']} ({exc}); "
+                                             "it and the following items were not deleted"))
+                break
+            force_remove(path)
             result.deleted.append((name, e["path"], e["bytes"]))
             log(f"reclaim   deleted {path}")
     return result

@@ -18,9 +18,9 @@ BuildDiet exists because people are afraid to delete the wrong thing. It must ne
 12. **Proofs expire.** The manifest records the platform, git HEAD, a hash of the top-level project files, and the config. `plan` refuses stale analyses unless you pass `--allow-stale`. Level-0 sources are re-checked when a plan is verified.
 13. **Deletion is narrow, checked and reversible.**
     * `analyze`, `plan`, `market` and `report` never delete anything.
-    * `reclaim` and `watch` delete only items of a JOINTLY VERIFIED plan, and by default only those that come back byte-for-byte.
+    * `reclaim` and `watch` delete only the items of a JOINTLY VERIFIED option (or `--free` plan), and only those that come back byte-for-byte.
     * Just before deletion each item is re-hashed and must match the signature recorded when it was proven. Its recovery source must be unchanged, and the analysis must not be stale. If any check fails, nothing in that project is deleted.
-    * Every deletion is appended to `.builddiet/reclaimed.json` before the next one.
+    * The record needed to restore an item is written to `.builddiet/reclaimed.json` *before* the item is deleted. If it cannot be written, nothing more is deleted.
     * `restore` brings items back and checks the hashes.
 14. **Nobody is surprised.**
     * `reclaim` asks you to type `reclaim`.
@@ -33,6 +33,7 @@ BuildDiet exists because people are afraid to delete the wrong thing. It must ne
     * Unresolvable paths count as protected. An unreadable protection list stops BuildDiet.
     * `--exclude` adds temporary exclusions and can never remove a protection.
 16. **Links are never followed.** Every walk, copy and deletion goes through `builddiet/fs.py`, which treats symlinks, junctions and other reparse points as opaque entries. On Windows with Python 3.10, `os.walk` and `shutil.copytree` do follow junctions (verified), which would read and copy whatever a junction points to.
+17. **Running out of space fails explicitly and safely.** A full disk during a sandbox copy or a run raises "out of disk space ... Nothing in your project was changed or deleted", instead of a generic error or a wrong verdict. A joint verification that cannot run leaves its option unverified.
 
 ## What BuildDiet can't protect you from
 

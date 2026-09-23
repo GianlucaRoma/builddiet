@@ -4,10 +4,12 @@ Every cycle:
 
     free >= prepare_below   keep the "market" of proofs up to date (analyze new or
                             stale workspaces while there is room for a sandbox)
-    free <  prepare_below   compute and JOINTLY VERIFY the cheapest plan that gets
-                            back to keep_free, within max_penalty; report it
+    free <  prepare_below   compute the three JOINTLY VERIFIED options (LEGGERO /
+                            NORMALE / ESTREMO) and the one to propose: the smallest
+                            that gets back to keep_free (LEGGERO or NORMALE)
     free <  reclaim_below   offer it (dialog / terminal), or reclaim it with --auto
-    free <  aggressive_below  same, with aggressive_max_penalty
+                            if it is not above --auto-max (default NORMALE)
+    free <  aggressive_below  ESTREMO may be proposed too
 
 Sandboxes go to the local drive with the most free space (or --sandbox-dir),
 so verification still works when the watched drive is nearly full.
@@ -30,7 +32,9 @@ from .experiment import AnalysisError, analyze
 from .planner import collect_items
 from .protect import Guard
 from .reclaim import reclaim
-from .service import affordable_target, load_manifests, verified_plan
+from .sandbox import SandboxError
+from .options import LIGHT, NORMAL, ORDER, TierRule, pick_for_need
+from .service import load_manifests, reclaim_options
 from .units import format_duration, format_size
 
 OK, PREPARE, RECLAIM, AGGRESSIVE = "ok", "prepare", "reclaim", "aggressive"
@@ -42,9 +46,10 @@ class WatchSettings:
     reclaim_below: float = 10.0
     aggressive_below: float = 5.0
     keep_free: float = 20.0  # percent free to get back to
-    max_penalty: float = 300.0  # seconds of rebuild a normal reclaim may cost
-    aggressive_max_penalty: float = 3600.0
+    light_max: float = 1.0  # LEGGERO / NORMALE boundary (see options.py)
+    normal_max: float = 300.0  # NORMALE / ESTREMO boundary
     auto: bool = False
+    auto_max: str = "NORMALE"  # --auto never reclaims a bigger option than this
     allow_recipes: bool = False  # run discovered recipes unattended (sandbox only)
     agent_logs: bool = False
     min_size: int = 100_000_000
@@ -104,7 +109,7 @@ def refresh_market(root: Path, s: WatchSettings, log: Callable[[str], None], gua
                 agent_log_dirs=default_log_dirs() if s.agent_logs else None,
                 guard=guard,
             )
-        except (AnalysisError, OSError, ValueError) as exc:
+        except (AnalysisError, SandboxError, OSError, ValueError) as exc:
             log(f"market    skipped {ws.name}: {exc}")
             continue
         manifest_mod.save(ws, m)
@@ -142,6 +147,8 @@ class CycleResult:
     reclaimed: int = 0
     message: str = ""
     refused: list = field(default_factory=list)
+    option: Optional[str] = None
+    options: list = field(default_factory=list)
 
 
 def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
@@ -162,39 +169,31 @@ def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
         return result
 
     result.needed = needed_bytes(status, s)
-    cap = s.aggressive_max_penalty if lvl == AGGRESSIVE else s.max_penalty
-    items = collect_items(manifests, strict=True, guard=guard)  # only byte-identical, never protected
-    target = affordable_target(items, result.needed, cap)
-    if target <= 0:
-        result.message = (f"Disk space is low ({status.free_pct:.0f}% free), but nothing proven can be "
-                          f"reclaimed within {format_duration(cap)} of rebuild.")
-        log(result.message)
-        return result
-    search, _ = verified_plan(manifests, target, sandbox_dir=s.sandbox_dir,
-                              max_attempts=s.max_attempts, strict=True, log=log, guard=guard)
-    if search.verified is None:
-        result.message = f"No jointly verified plan: {search.stopped}."
-        log(result.message)
-        return result
-    plan = search.verified.plan
-    if plan.cost > cap + 1e-9:
-        result.message = (f"The cheapest verified plan would cost {format_duration(plan.cost)} of rebuild, "
-                          f"more than the {format_duration(cap)} allowed; nothing proposed.")
+    rule = TierRule(light_max=s.light_max, normal_max=s.normal_max)
+    options = reclaim_options(manifests, sandbox_dir=s.sandbox_dir, max_attempts=s.max_attempts,
+                              rule=rule, log=log, guard=guard)
+    result.options = options
+    allowed = ORDER if lvl == AGGRESSIVE else (LIGHT, NORMAL)
+    chosen = pick_for_need(options, result.needed, allowed)
+    lines = [f"Disk space is low ({status.free_pct:.0f}% free); {format_size(result.needed)} needed "
+             f"to get back to {s.keep_free:.0f}% free."]
+    for o in options:
+        state = "PASS" if o.verified else "-"
+        lines.append(f"  {o.name:8} {format_size(o.freed):>9}   rebuild {format_duration(o.rebuild_seconds):>7}"
+                     f"   {len(o.items)} items   joint verification {state}")
+    if chosen is None:
+        result.message = "\n".join(lines + ["Nothing is jointly verified to reclaim."])
         log(result.message)
         return result
     result.verified = True
-    result.plan_bytes, result.plan_cost = plan.freed, plan.rebuild_seconds
-    short = "" if plan.freed >= result.needed else (
-        f"\n(needed {format_size(result.needed)} to get back to {s.keep_free:.0f}% free; only "
-        f"{format_size(plan.freed)} is proven reclaimable within {format_duration(cap)} of rebuild)")
-    result.message = (
-        f"Disk space is low ({status.free_pct:.0f}% free).\n"
-        f"BuildDiet can safely reclaim {format_size(plan.freed)}.\n"
-        f"Expected worst-case rebuild cost: {format_duration(plan.rebuild_seconds)}.\n"
-        f"Joint verification: PASS{short}"
-    )
+    result.option = chosen.name
+    result.plan_bytes, result.plan_cost = chosen.freed, chosen.rebuild_seconds
+    short = "" if chosen.freed >= result.needed else " (not enough to reach the target, but the most allowed now)"
+    lines.append(f"Proposed: {chosen.name}: BuildDiet can safely reclaim {format_size(chosen.freed)}; "
+                 f"expected worst-case rebuild {format_duration(chosen.rebuild_seconds)}.{short}")
+    result.message = "\n".join(lines)
     log(result.message)
-    for item in plan.items:
+    for item in chosen.items:
         try:
             where = Path(item.root).resolve().relative_to(root).as_posix()
         except ValueError:
@@ -204,22 +203,27 @@ def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
     if lvl == PREPARE:
         return result
 
-    if s.auto:
+    within_auto = ORDER.index(chosen.name) <= ORDER.index(s.auto_max)
+    if s.auto and within_auto:
         go = True
     else:
-        go = ask("BuildDiet", result.message, f"Reclaim {format_size(plan.freed)}") if s.dialog else None
+        if s.auto:
+            log(f"auto      {chosen.name} is above --auto-max {s.auto_max}: asking instead")
+        go = ask("BuildDiet", result.message, f"Reclaim {chosen.name} ({format_size(chosen.freed)})") \
+            if s.dialog else None
         if go is None and (interactive if interactive is not None else sys.stdin.isatty()):
             try:
-                go = input(f"Reclaim {format_size(plan.freed)} now? [y/N] ").strip().lower() in ("y", "yes", "s", "si")
+                go = input(f"Reclaim {chosen.name} ({format_size(chosen.freed)}) now? [y/N] ").strip().lower() \
+                    in ("y", "yes", "s", "si")
             except EOFError:
                 go = False
     if not go:
         log("reclaim   not approved; nothing deleted")
         return result
-    done = reclaim(search, manifests, log, excludes=s.excludes)
+    done = reclaim(chosen.as_search(), manifests, log, excludes=s.excludes)
     result.reclaimed = done.freed
     result.refused = done.refused
-    log(f"reclaim   freed {format_size(done.freed)}"
+    log(f"reclaim   {chosen.name}: freed {format_size(done.freed)}"
         + (f"; refused: {done.refused}" if done.refused else "")
         + ". Bring anything back with `builddiet restore <project>`.")
     return result

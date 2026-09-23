@@ -19,10 +19,13 @@ from . import reclaim as reclaim_mod
 from .model import how
 from .planner import size_first
 from .sandbox import default_sandbox_base
-from .service import load_manifests, verified_plan
+from . import protect as protect_mod
+from . import workspaces
+from .options import ALIASES, TierRule
+from .service import load_manifests, reclaim_options, verified_plan
 from .watch import WatchSettings, market, value
 from .watch import run as watch_run
-from .report import render_backup, render_plan, render_report, render_scan, table
+from .report import render_backup, render_options, render_plan, render_report, render_scan, table
 from .protect import Guard, ProtectionError
 from .protect import protect as protect_path
 from .protect import load as load_protected
@@ -71,8 +74,8 @@ def _quote_arg(value: str) -> str:
     return f'"{value}"' if " " in value else value
 
 
-def _effective_config(args) -> Config:
-    root = Path(args.path).resolve()
+def _effective_config(args, root: Path = None) -> Config:
+    root = Path(root or args.path).resolve()
     cfg = load_config(root) or Config()
     if args.regenerate is not None:
         cfg.regenerate = args.regenerate or None
@@ -95,42 +98,97 @@ def _guard(args) -> Guard:
     return Guard(getattr(args, "exclude", None) or ())
 
 
+def _projects_under(path: Path, guard: Guard) -> list:
+    """The folder itself if it is a project, else the projects found below it."""
+    path = Path(path).resolve()
+    if workspaces.is_workspace(path):
+        return [path]
+    return workspaces.discover(path, guard=guard) or [path]
+
+
+def _guard_notes(guard: Guard, where: Path) -> tuple:
+    """Protected paths that concern ``where`` (inside it or containing it), and exclusions."""
+    here = protect_mod.canonical(where)
+    protected = [r["canonical"] for r in guard.records
+                 if protect_mod._inside(r["canonical"], here) or protect_mod._inside(here, r["canonical"])]
+    return protected, list(guard.excluded)
+
+
+def _show_options(args, manifests: list, where: Path, guard: Guard, skipped=()) -> list:
+    rule = TierRule(light_max=parse_duration(args.light_max), normal_max=parse_duration(args.normal_max))
+    options = reclaim_options(
+        manifests, sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
+        force=args.force, include_git=getattr(args, "include_git", False), rule=rule,
+        max_attempts=args.max_attempts, log=_log, guard=guard,
+    )
+    protected, excluded = _guard_notes(guard, where)
+    if getattr(args, "json", False):
+        print(json.dumps({"options": [o.to_dict() for o in options], "protected": protected,
+                          "excluded": excluded, "skipped": list(skipped)}, indent=2))
+    else:
+        print(render_options(options, where=str(where), projects=len(manifests), skipped=skipped,
+                             protected=protected, excluded=excluded, rule=rule,
+                             details=getattr(args, "details", False)))
+    return options
+
+
 def cmd_analyze(args) -> int:
     guard = _guard(args)
     state = guard.status(args.path)
     if state != "clear":  # before anything inside it is read, even the config
         raise ConfigError(f"{Path(args.path).resolve()} is {state}; it is not analyzed")
-    root = Path(args.path).resolve()
-    cfg = _effective_config(args)
+    where = Path(args.path).resolve()
+    projects = _projects_under(where, guard)
     if args.dry_run:
-        regions = scan(root, cfg, guard=guard)
-        rows = [[r.display, format_size(r.bytes), r.status, r.known or ""]
-                for r in sorted(regions, key=lambda r: -r.bytes)]
-        print(table(rows, ["path", "size", "status", "known"], right=(1,)))
-        n = sum(1 for r in regions if r.status == "candidate")
-        print(f"\n{n} candidates would be experimented on. Nothing was run.")
+        for root in projects:
+            regions = scan(root, _effective_config(args, root), guard=guard)
+            rows = [[r.display, format_size(r.bytes), r.status, r.known or ""]
+                    for r in sorted(regions, key=lambda r: -r.bytes)]
+            print(f"{root}")
+            print(table(rows, ["path", "size", "status", "known"], right=(1,)))
+            n = sum(1 for r in regions if r.status == "candidate")
+            print(f"\n{n} candidates would be experimented on. Nothing was run.\n")
         return 0
     agent_dirs = None
     if args.agent_logs or args.agent_logs_dir:
         agent_dirs = [Path(d) for d in args.agent_logs_dir] if args.agent_logs_dir else default_log_dirs()
-    manifest = analyze(
-        root,
-        cfg,
-        sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
-        keep_sandbox=args.keep_sandbox,
-        only=args.only,
-        force=args.force,
-        log=_log,
-        recipes_enabled=not args.no_recipes,
-        agent_log_dirs=agent_dirs,
-        confirm=lambda found, rejected: _confirm_recipes(found, rejected, args.yes),
-        max_tries=args.max_tries,
-        guard=guard,
-    )
-    if not args.no_save:
-        _log(f"saved     {manifest_mod.save(root, manifest)}")
-    print(json.dumps(manifest, indent=2) if args.json else render_report(manifest))
-    return 0
+    manifests, failed = [], []
+    for root in projects:
+        if len(projects) > 1:
+            _log(f"\n=== {root}")
+        try:
+            manifest = analyze(
+                root,
+                _effective_config(args, root),
+                sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
+                keep_sandbox=args.keep_sandbox,
+                only=args.only,
+                force=args.force,
+                log=_log,
+                recipes_enabled=not args.no_recipes,
+                agent_log_dirs=agent_dirs,
+                confirm=lambda found, rejected: _confirm_recipes(found, rejected, args.yes),
+                max_tries=args.max_tries,
+                guard=guard,
+            )
+        except (AnalysisError, SandboxError) as exc:
+            if len(projects) == 1:
+                raise
+            failed.append(f"{root.name}: {exc}")
+            _log(f"skipped   {root}: {exc}")
+            continue
+        if not args.no_save:
+            _log(f"saved     {manifest_mod.save(root, manifest)}")
+        manifests.append(manifest)
+        if len(projects) == 1 and (args.json or args.report):
+            print(json.dumps(manifest, indent=2) if args.json else render_report(manifest))
+    if args.no_options or args.json:
+        return 0 if manifests else 1
+    if len(projects) == 1 and args.report:
+        print()
+    _show_options(args, manifests, where, guard, skipped=failed)
+    print("\nTo reclaim one of these options:  builddiet reclaim " + _quote_arg(str(args.path)))
+    return 0 if manifests else 1
 
 
 def _confirm_recipes(found: list, rejected: list, yes: bool) -> bool:
@@ -194,6 +252,14 @@ def _plan(args, target: int):
 
 
 def cmd_plan(args) -> int:
+    if not args.free:
+        guard = _guard(args)
+        manifests, skipped = load_manifests(args.paths, allow_stale=args.allow_stale, guard=guard)
+        where = Path(args.paths[0]).resolve() if len(args.paths) == 1 else Path(".").resolve()
+        options = _show_options(args, manifests, where, guard, skipped=skipped)
+        if not any(o.items or o.dropped for o in options):
+            return 3
+        return 0 if any(o.verified for o in options) else 4
     target = parse_size(args.free)
     _manifests, skipped, search, items = _plan(args, target)
     if args.json:
@@ -210,6 +276,8 @@ def cmd_plan(args) -> int:
 
 
 def cmd_reclaim(args) -> int:
+    if not args.free:
+        return _reclaim_option(args)
     target = parse_size(args.free)
     args.no_verify = False
     args.strict = not args.allow_nondeterministic  # by default only delete what comes back byte-for-byte
@@ -234,6 +302,57 @@ def cmd_reclaim(args) -> int:
             return 5
     done = reclaim_mod.reclaim(search, manifests, _log, excludes=args.exclude or ())
     print(f"\nFreed {format_size(done.freed)} ({len(done.deleted)} items).")
+    for project, reason in done.refused:
+        print(f"  ! {project}: nothing deleted, {reason}")
+    if done.deleted:
+        print("Bring anything back with:  builddiet restore <project> [path ...]")
+    return 0 if not done.refused else 6
+
+
+def _reclaim_option(args) -> int:
+    guard = _guard(args)
+    manifests, skipped = load_manifests(args.paths, allow_stale=args.allow_stale, guard=guard)
+    where = Path(args.paths[0]).resolve() if len(args.paths) == 1 else Path(".").resolve()
+    options = _show_options(args, manifests, where, guard, skipped=skipped)
+    usable = {o.name: o for o in options if o.verified}
+    if not usable:
+        print("\nNothing deleted: no option is jointly verified.")
+        return 3
+    choice = ALIASES.get((args.option or "").lower()) if args.option else None
+    if args.option and choice is None:
+        raise ConfigError(f"unknown option {args.option!r}: use leggero, normale or estremo")
+    if choice is None:
+        if not sys.stdin.isatty():
+            print("\nNothing deleted: choose with --option leggero|normale|estremo (and --yes).")
+            return 5
+        names = " / ".join(n.lower() for n in usable)
+        try:
+            answer = input(f"\nWhich option? [{names} / nothing] ").strip().lower()
+        except EOFError:
+            answer = ""
+        choice = ALIASES.get(answer)
+        if choice is None:
+            print("Nothing deleted.")
+            return 5
+    if choice not in usable:
+        print(f"\nNothing deleted: {choice} is not jointly verified.")
+        return 4
+    option = usable[choice]
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("\nNothing deleted: pass --yes to reclaim non-interactively.")
+            return 5
+        try:
+            answer = input(f"\n{choice}: delete {len(option.items)} items and free {format_size(option.freed)} "
+                           f"(rebuild if needed: {format_duration(option.rebuild_seconds)})? "
+                           "Type 'reclaim' to confirm: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer != "reclaim":
+            print("Nothing deleted.")
+            return 5
+    done = reclaim_mod.reclaim(option.as_search(), manifests, _log, excludes=args.exclude or ())
+    print(f"\n{choice}: freed {format_size(done.freed)} ({len(done.deleted)} items).")
     for project, reason in done.refused:
         print(f"  ! {project}: nothing deleted, {reason}")
     if done.deleted:
@@ -324,9 +443,8 @@ def cmd_watch(args) -> int:
     settings = WatchSettings(
         prepare_below=args.prepare_below, reclaim_below=args.reclaim_below,
         aggressive_below=args.aggressive_below, keep_free=args.keep_free,
-        max_penalty=parse_duration(args.max_penalty),
-        aggressive_max_penalty=parse_duration(args.aggressive_max_penalty),
-        auto=args.auto, allow_recipes=args.allow_recipes, agent_logs=args.agent_logs,
+        light_max=parse_duration(args.light_max), normal_max=parse_duration(args.normal_max),
+        auto=args.auto, auto_max=ALIASES.get(args.auto_max.lower(), args.auto_max), allow_recipes=args.allow_recipes, agent_logs=args.agent_logs,
         min_size=parse_size(args.min_size),
         sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
         dialog=not args.no_dialog, interval=parse_duration(args.interval),
@@ -335,13 +453,16 @@ def cmd_watch(args) -> int:
     _guard(args)  # fail now (not in the loop) if the protection list is unreadable
     if not (settings.aggressive_below < settings.reclaim_below < settings.prepare_below <= settings.keep_free):
         raise ConfigError("thresholds must satisfy aggressive < reclaim < prepare <= keep-free")
+    if settings.auto_max not in ALIASES.values():
+        raise ConfigError("--auto-max must be leggero, normale or estremo")
     base = Path(args.path).resolve()
     _log(f"watching  {base}  (sandboxes: {settings.sandbox_dir or default_sandbox_base()})")
     _log(f"          prepare < {settings.prepare_below}%, reclaim < {settings.reclaim_below}%, "
          f"aggressive < {settings.aggressive_below}%, back to {settings.keep_free}% free")
-    _log(f"          automatic reclaim: {'ON' if settings.auto else 'off (asks first)'}; max rebuild "
-         f"{format_duration(settings.max_penalty)} ({format_duration(settings.aggressive_max_penalty)} "
-         "when critical)")
+    _log(f"          options: LEGGERO (copy or rebuild <= {format_duration(settings.light_max)}), "
+         f"NORMALE (rebuild <= {format_duration(settings.normal_max)}), ESTREMO (everything proven)")
+    _log(f"          automatic reclaim: " + (f"ON, up to {settings.auto_max}" if settings.auto
+                                             else "off (asks first)"))
     watch_run(base, settings, once=args.once, log=_log)
     return 0
 
@@ -395,8 +516,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="overwrite an existing config")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("analyze", help="prove what can be deleted (no configuration needed)")
+    p = sub.add_parser("analyze", help="analyze a project or a folder of projects; show LEGGERO / NORMALE / ESTREMO")
     p.add_argument("path", nargs="?", default=".")
+    p.add_argument("--report", action="store_true", help="also print the full per-project report (single project)")
+    p.add_argument("--no-options", action="store_true", help="analyze only; do not compute the options")
+    p.add_argument("--max-attempts", type=int, default=5, help=argparse.SUPPRESS)
+    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--details", action="store_true", help="list every item of every option")
     p.add_argument("--yes", "-y", action="store_true",
                    help="run the discovered recipes (in the sandbox) without asking")
     p.add_argument("--no-recipes", action="store_true",
@@ -429,9 +556,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_report)
 
-    p = sub.add_parser("plan", help="cheapest jointly verified way to free SIZE")
+    p = sub.add_parser("plan", help="show LEGGERO / NORMALE / ESTREMO (jointly verified)")
     p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
-    p.add_argument("--free", required=True, help="space to reclaim, e.g. 20GB")
+    p.add_argument("--free", help="advanced / CI: a fixed amount to free instead of the three options")
+    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--details", action="store_true", help="list every item of every option")
     p.add_argument("--strict", action="store_true", help="only byte-identical regenerations")
     p.add_argument("--include-git", action="store_true",
                    help="also plan files that are tracked and clean in git (usually source code)")
@@ -447,10 +577,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_plan)
 
-    p = sub.add_parser("reclaim", help="delete a jointly verified plan (asks first)")
+    p = sub.add_parser("reclaim", help="choose LEGGERO / NORMALE / ESTREMO and delete it (asks first)")
     p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
-    p.add_argument("--free", required=True, help="space to reclaim, e.g. 20GB")
+    p.add_argument("--option", help="leggero | normale | estremo (otherwise you are asked)")
+    p.add_argument("--free", help="advanced / CI: a fixed amount to free instead of an option")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--details", action="store_true", help="list every item of every option")
     p.add_argument("--allow-nondeterministic", action="store_true",
                    help="also delete workflow outputs that come back with different bytes (timestamps)")
     p.add_argument("--include-git", action="store_true", help="also delete files restorable from git")
@@ -484,9 +618,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reclaim-below", type=float, default=10.0, help="%% free: offer to reclaim (10)")
     p.add_argument("--aggressive-below", type=float, default=5.0, help="%% free: bigger budget (5)")
     p.add_argument("--keep-free", type=float, default=20.0, help="%% free to get back to (20)")
-    p.add_argument("--max-penalty", default="5m", help="max rebuild time of a reclaim (5m)")
-    p.add_argument("--aggressive-max-penalty", default="1h", help="when below --aggressive-below (1h)")
-    p.add_argument("--auto", action="store_true", help="reclaim without asking, within the limits")
+    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--auto", action="store_true", help="reclaim the proposed option without asking")
+    p.add_argument("--auto-max", default="normale", help="largest option --auto may reclaim (normale)")
     p.add_argument("--allow-recipes", action="store_true",
                    help="let analyses run discovered recipes (sandbox only) without asking")
     p.add_argument("--agent-logs", action="store_true", help="also use Codex / Claude Code session logs")

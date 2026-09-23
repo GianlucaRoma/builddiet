@@ -91,3 +91,17 @@ Fixes:
 * STALE is excluded from plans and counted as "must back up".
 
 Regression tests cover both cases (`tests/test_end_to_end.py`). Against the old code they fail.
+
+## Final gate: the three options
+
+Re-run from scratch with the final v0.1 code; 12/12 verdicts. With the default boundaries (1s / 5m), all four PROVEN outputs rebuild in under a second, so all three options are the same set (8.0 MB, 1.1s) and all PASS.
+
+With the boundaries tightened on purpose (`--light-max 0.05s --normal-max 0.5s`, printed with the options), the three options differ:
+
+| option | frees | rebuild | items |
+|---|---|---|---|
+| LEGGERO | 1.5 MB | 0.0s | derived/shards |
+| NORMALE | 2.7 MB | 0.5s | + derived/features.bin (0.4s), derived/corpus.idx.json (0.1s) |
+| ESTREMO | 8.0 MB | 1.1s | + cache/ngrams.json (0.6s) |
+
+`reclaim --option estremo --yes` freed 8.0 MB. `restore` brought all 4 items back byte-identical. It also reported, as always here, that the declared build refreshed the stale `derived/weights.q8`.
