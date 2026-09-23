@@ -2,149 +2,149 @@
 
 **Prove what's disposable. Keep what matters.**
 
-BuildDiet runs removal experiments in a sandbox copy of a workspace to find out which files and directories your own workflow can regenerate. It measures what each one costs to rebuild, then plans the cheapest way to reclaim disk space and verifies that plan by removing everything in it together. It is report-only: it never deletes anything of yours.
+Point BuildDiet at a project folder. It works out, by experiment and in a sandbox copy, which files and directories can be brought back byte-for-byte, what that costs, and how. Then it gives you the cheapest set to delete to free the space you asked for. It is report-only: it never deletes anything of yours.
+
+```bash
+pip install -e .
+builddiet analyze path/to/project        # no configuration needed
+builddiet plan path/to/project --free 20GB
+```
 
 > *Non indovina cosa puoi cancellare. Lo verifica.*
 
 ## Why
 
-Workspaces fill up with build trees, caches, generated datasets, model conversions and old outputs. Deleting them by hand is scary for two reasons: you don't know what is still needed, and you don't know how long it will take to get it back.
+Workspaces fill up with build trees, datasets, model files, exports, caches and copies of all of those. Deleting them by hand is scary for two reasons: you don't know what is still needed, and you don't know how long it will take to get it back.
 
-Disk cleaners decide from a **catalog**: they know that `node_modules/` and `target/` are disposable. Cost-aware systems such as Nectar, lineage-based workflow managers and build caches decide from **lineage they recorded themselves**. Neither helps with `experiments/arena/` or `layout_v2.tmp`, directories that are specific to your project, that no catalog knows about, and that no system recorded when they were created.
+Disk cleaners decide from a **catalog of names** (`node_modules`, `target`). Duplicate finders decide from hashes but know nothing about builds. Cost-aware systems such as Nectar and workflow managers decide from **lineage they recorded themselves**. None of them helps with `experiments/arena/` or `layout_v2.tmp`: directories that are specific to your project and that no tool recorded when they were created.
 
-BuildDiet finds out by experiment:
+## How it proves things
 
-```
-copy the workspace into a sandbox
-fingerprint every candidate (your bytes, SHA-256)
-run your workflow (regenerate + verify) twice      -> must PASS
-for each candidate file or directory:
-    remove it (in the sandbox only), run the workflow, time it
-    did verify pass?  did it come back?  are the bytes yours?
-    if they differ: regenerate again -> stale copy, or nondeterministic output?
-```
+You don't tell BuildDiet which commands you use. It looks for evidence itself and then checks it.
 
-## Real result (BD-REAL gate)
+| Level | What BuildDiet looks for | What counts as proof |
+|---|---|---|
+| **0: bytes exist elsewhere** (runs nothing) | an identical copy in the project, a `.zip`/`.tar*` holding the same files, or git | SHA-256 of every file matches (archive members are decompressed; git content is rendered through `git cat-file --filters`) |
+| **1: a recipe recreates it** | scripts that mention the name, `Makefile` targets, lockfiles, commands in `README`/`AGENTS.md`/CI, and optionally Codex / Claude Code session logs | in a sandbox copy: remove it, run the recipe, and it comes back **byte-for-byte**, and **no other existing file changes** |
+| **2: your declared workflow** (optional, `builddiet init`) | your build and test commands | the build recreates it and the tests pass |
 
-This is a small real workspace: a make-style build doing real work, with canonical inputs, derived outputs, a stale output, a truncated one, and notes that nothing needs. The full write-up is in [docs/BD-REAL.md](docs/BD-REAL.md).
+Level 1 needs no test command, because the bar is higher than "tests pass": after regeneration the project is byte-for-byte what it was.
+
+Before anything runs, BuildDiet shows you the recipes it found and asks once (`--yes` skips the question). Commands that push, publish, install, delete, touch the network, or use paths outside the project are **never** run:
 
 ```
-  Total workspace           12.2 MB
-  PROVEN REQUIRED            3.2 MB
-  PROVEN REGENERABLE         8.3 MB
-  NOT REGENERATED (keep)     3.3 KB
-  STALE COPY (review)      660.8 KB
+Found 5 possible recipes. They run ONLY inside a sandbox copy;
+a file counts as proven only if a recipe recreates it byte-for-byte
+without changing anything else.
+  python -c "import hashlib, os; os.makedirs('cache'...   <- agent log: ran right before it was written
+  python scripts/train.py                                 <- script scripts/train.py mentions it
+  ...
+  never run: python scripts/publish.py && git push        <- changes git state
+Try them in the sandbox? [Y/n]
+```
 
+## Real result (BD-ZERO gate, no configuration)
+
+The workspace is a small data/ML-shaped git repository. BuildDiet was given only the folder ([docs/BD-ZERO.md](docs/BD-ZERO.md)):
+
+```
 SPACE YOU CAN PROVABLY RECLAIM
-  path                         size   rebuild   identity
-  derived/build-info.json     132 B      0.0s   recreated
-  derived/shards/            1.6 MB      0.0s   identical
-  cache/ngrams.json          5.4 MB      0.6s   identical
-  derived/features.bin       1.2 MB      0.4s   identical
-  derived/corpus.idx.json   41.9 KB      0.1s   identical
+  path            size   rebuild   how to get it back
+  features/     1.3 MB      0.0s   copy of backups/features-2026-09-01
+  release/     22.7 KB      0.0s   extract from dist/app-1.0.zip
+  cache/      640.0 KB      0.2s   run: python -c "import hashlib, os; ... (from an agent log)
+  models/     327.7 KB      1.3s   run: python scripts/train.py
 
-REQUIRED:         data/corpus.txt, data/weights.f32, build.py, verify.py
-NOT REGENERATED:  notes/meeting-2025-11.md
-STALE:            derived/weights.q8 (inputs changed), derived/corpus.z (truncated)
+NOT PROVEN (keep):  data/ (canonical), notes/, backups/ and dist/ (sources of the above)
+STALE (review):     exports/  (the recipe produces different bytes than the copy on disk)
+IN GIT:             src/, scripts/  (restorable with git checkout; not planned by default)
+NOT TESTED:         reports/  (different bytes on every run: timestamped)
 ```
 
-All 12 verdicts matched the expected ones, and they were identical across 4 runs. The rebuild times BuildDiet measured matched the build's own timings. The original workspace was byte-identical afterwards.
+All 12 verdicts were as expected, and identical across 3 repeated runs. The original workspace stayed byte-identical.
 
 ```
-$ builddiet plan --free 2MB --sandbox-dir D:/sandboxes
-CANDIDATE PLAN #1
-  derived/features.bin   1.2 MB   0.5s
-  derived/shards/        1.6 MB   0.0s
-  -> joint check PASSED: with all 2 items removed together, everything was recreated and verify passed
-================================================================
+$ builddiet plan --free 2MB
 JOINTLY VERIFIED PLAN
-  derived/features.bin   1.2 MB   0.5s
-  derived/shards/        1.6 MB   0.0s
-  Frees 2.8 MB. Measured joint rebuild 0.4s (individual estimates sum to 0.5s).
-  An unverified biggest-first choice would cost 0.6s.
+  cache/      640.0 KB   0.2s   run: python -c "import hashlib, os; os.makedi...
+  features/     1.3 MB   0.0s   copy of backups/features-2026-09-01
+  models/     327.7 KB   1.3s   run: python scripts/train.py
+  Frees 2.2 MB. Removed together, every item came back byte-for-byte.
+  Measured joint rebuild 1.6s; individual estimates sum to 1.5s.
 ```
 
-Individual proofs are leave-one-out, so `plan` treats the cheapest set as a **candidate** only. It copies the workspace into a fresh sandbox, removes every item in the candidate at once, and applies the same invariants as PROVEN. A candidate that fails is never presented as verified. BuildDiet then tries the next-cheapest candidate, or reports that no jointly verified plan exists for that target. Two artifacts that regenerate each other are both PROVEN individually, but a plan that removes both is rejected (`tests/test_joint.py`).
+`plan` solves a min-cost covering knapsack over the proven items. It then **removes the whole candidate plan at once** in a fresh sandbox and restores everything (copies, archives, recipes). A plan is only called verified if every item comes back byte-for-byte. If it doesn't, the next-cheapest plan is tried; if none passes, `plan` says so.
 
 ## Verdicts
 
-| Verdict | Meaning | Offered for reclaiming? |
+| Verdict | Meaning | Planned? |
 |---|---|---|
-| **PROVEN** | Removed in the sandbox, the workflow recreated it, and verify passed. `identical` means byte-for-byte. `recreated` means the bytes differ on every regeneration (timestamps). | Yes, at the measured cost |
-| **REQUIRED** | Without it, regenerate or verify fails. | No |
-| **NOT REGENERATED** | The workflow passes without it, but nothing recreates it. | **No.** Your build doesn't need `family_photos/` either. |
-| **STALE** | The workflow recreates it, the same way twice, but *differently from your copy*. That means a stale or corrupt output, or hand edits. Your current bytes are not reproducible. | No, review it |
-| **KNOWN** | Matches an ecosystem catalog (`node_modules`, `target`, ...) but was not tested. | No |
-| **UNKNOWN** | Not tested (excluded, too small, metadata). | No |
+| **PROVEN** | Comes back byte-for-byte from a copy, an archive, a recipe or your workflow | yes |
+| **STALE** | A recipe recreates it deterministically but *differently* from your copy: a stale or corrupt output, or hand edits | no, review it |
+| **IN GIT** | Tracked and clean; `git checkout` restores it (usually source code) | only with `--include-git` |
+| **NOT PROVEN** | Nothing recreates it: canonical data, notes, sources of other proofs | no, keep it |
+| **INCONCLUSIVE** | Recreated, but with different bytes every run (timestamps); declare a workflow to prove it | no |
+| **REQUIRED** | (workflow mode) without it the build or tests fail | no |
+| **KNOWN** / **UNKNOWN** | Catalog match, too small, excluded, or metadata; not tested | no |
 
-## Quick start
+## Safety
+
+* **Report-only.** Nothing outside BuildDiet's own sandboxes is ever deleted.
+* **Sandbox.** The project is copied, and every destructive step is path-checked to stay inside the copy. Absolute paths to the project in discovered commands are rewritten to point at the sandbox.
+* **You approve the commands.** Discovered recipes are listed, and nothing runs until you say yes. Dangerous categories are refused outright.
+* **Side effects disqualify.** A recipe that changes any other existing file proves nothing. From the outside, refreshing a stale output and overwriting your data look the same. The only exception is a short, explicit list of volatile files (`*.log`, `logs/`, `__pycache__/`, `*.pyc`, tool caches).
+* **Agent logs are opt-in and local.** `--agent-logs` reads `~/.codex/sessions` and `~/.claude/projects` on your machine, keeps only commands whose working directory is inside the analyzed project, and sends nothing anywhere.
+* **The original is watched.** If anything in it changes during an analysis, the report says so.
+
+Details: [docs/SAFETY.md](docs/SAFETY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+
+## Options you may need
 
 ```bash
-pip install -e .
-builddiet init path/to/project                 # suggests a workflow for Make/CMake/Cargo/npm/Python
-builddiet analyze path/to/project --dry-run    # list what would be tested
-builddiet analyze path/to/project --sandbox-dir D:/sandboxes
-builddiet plan path/to/project --free 20GB --sandbox-dir D:/sandboxes   # jointly verified
-builddiet backup-plan path/to/project          # which bytes are irreproducible
-builddiet scan C:/Projects                     # summary across analyzed projects
+builddiet analyze DIR --sandbox-dir E:/scratch   # the sandbox is a full copy: put it on a drive with space
+builddiet analyze DIR --min-size 100MB --depth 2  # candidate granularity
+builddiet analyze DIR --agent-logs                # also learn from Codex / Claude Code sessions
+builddiet analyze DIR --no-recipes                # hash proofs only; runs nothing
+builddiet plan DIR --free 50GB --include-git
+builddiet backup-plan DIR                         # which bytes are irreproducible
+builddiet scan C:/Projects                        # summary across analyzed projects
+builddiet init DIR                                # optional: declare build + test commands
 ```
 
-`init` writes `<project>/.builddiet/config.toml`:
+## Limits
 
-```toml
-[commands]
-regenerate = 'cmake -S . -B build && cmake --build build'
-verify = 'ctest --test-dir build --output-on-failure'
-
-[candidates]
-depth = 1                          # directories and files (>= min_size) at this depth
-include = ['experiments/cache', 'models/layout.tmp']   # test these individually
-exclude = ['family_photos']        # never touched, not even in the sandbox
-min_size = '10MB'
-
-[reuse]                            # optional: planner minimises p(reuse) x rebuild time
-'old-results' = 0.05
-```
-
-## Limits (read before trusting a plan)
-
-* **Joint verification has a budget.** `plan` verifies up to `--max-attempts` candidates (default 5). Each attempt needs a full sandbox copy and three workflow runs. Candidates are explored cheapest-first by excluding failing items; supersets of a failed set are never tried. If no candidate passes, `plan` says so and exits with code 4. `--no-verify` shows only the candidate, clearly labelled as NOT jointly verified. A verified plan is verified as a whole: if you delete only part of it, only the individual proofs cover that part.
-* **A proof is only as strong as your verify command.** PROVEN means "recreated, and your verify command still passes".
-* **Incremental builds can hide inputs.** An input that an up-to-date build never reads shows up as NOT REGENERATED rather than REQUIRED. Both mean "keep", so this errs on the safe side.
-* **Stale detection** needs a deterministic generator. A stale file produced by a nondeterministic generator is reported as PROVEN `recreated`.
-* **Commands run for real** inside the sandbox. Side effects outside it (network, databases, absolute paths) are not contained. Writes to the original project are detected and reported, but not prevented.
-* **The sandbox is a full copy.** You need free space about equal to the workspace size, on some drive (`--sandbox-dir`).
-* **Rebuild times come from single runs** and assume a warm machine. Remote inputs that could disappear later are not modelled.
-* **Tested scale:** unit tests and BD-REAL (12 MB, Windows). It has not been validated on large real workspaces yet.
-
-See [docs/EXPERIMENT_MODEL.md](docs/EXPERIMENT_MODEL.md), [docs/SAFETY.md](docs/SAFETY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+* **Scale.** Validated on unit tests and two small real workspaces ([BD-ZERO](docs/BD-ZERO.md), [BD-REAL](docs/BD-REAL.md)), both on Windows. It has not been validated on large workspaces yet, and every experiment needs a full copy of the project.
+* **Recipes are only as good as the evidence.** If no script, doc, Makefile or log shows how something was made, BuildDiet says NOT PROVEN; it does not guess.
+* **Recipes run for real** in the sandbox. External side effects (network, databases) are not contained, although the obvious categories are refused.
+* **Rebuild time is a single measured run.** For recipes it is the full run time; for a declared workflow it is the time above a warm build.
+* **Nondeterministic outputs** can only be PROVEN with a declared workflow (level 2).
+* **Joint verification is bounded** (`--max-attempts`, default 5). A verified plan is verified as a whole: if you delete only part of it, only the individual proofs cover that part.
 
 ## Related work
 
-Cost-aware reclamation of derived data is well established. Nectar (OSDI 2010) deletes derived datasets by a cost/benefit ratio until a space target is met. Minimum-cost store-or-regenerate strategies for workflow data date from 2010 onwards. Hitachi patents delete regenerable data using recorded regeneration time. Build caches such as kache are adding rebuild-cost-aware eviction. All of these know what is regenerable from lineage they recorded, from declarations, or from catalogs.
-
-BuildDiet instead establishes regenerability of existing, unmanaged data by removal experiments, and feeds the measured costs into the plan. We are not aware of prior work that does this, but the audit in [docs/BD-PRIOR.md](docs/BD-PRIOR.md) has stated limits.
+Every ingredient exists somewhere. Duplicate finders (rmlint, czkawka, fclones) find identical files and directories. Reproducible-build tools rebuild and compare hashes. Nectar (OSDI 2010) and Hitachi patents reclaim derived data by recomputation cost, using lineage they recorded. Sciunit and ReproZip recover provenance by tracing execution. We are not aware of prior work that establishes regenerability of existing, unmanaged files by removal experiments with discovered recipes and plans the cheapest jointly verified reclaim. The audit and its limits are in [docs/BD-PRIOR.md](docs/BD-PRIOR.md).
 
 ## Layout
 
 ```
 builddiet/
-  scanner.py      non-overlapping partition into candidate directories and files
-  sandbox.py      isolated copy; the only place anything is removed
-  experiment.py   baseline, then remove / regenerate / verify (and re-verify when bytes differ)
-  verifier.py     fingerprints; identical / recreated / partial / absent / stale
-  cost.py         rebuild penalty = run time - warm baseline; x reuse probability
-  planner.py      exact min-cost covering knapsack (DP) + joint-verified candidate search
-  manifest.py     persisted proofs + environment fingerprint / staleness
-  adapters/       Make, CMake, Cargo, Node, Python: workflow hints + KNOWN catalogs
+  level0.py       hash proofs: duplicates, archives, git (+ restore)
+  recipes.py      recipe discovery and the safety filter
+  agentlogs.py    opt-in reader for Codex / Claude Code session logs
+  autoprove.py    level 1: byte-identical regeneration with no side effects
+  experiment.py   orchestration, level 2 workflow experiments, joint verification
+  planner.py      exact min-cost covering knapsack + jointly verified search
+  scanner.py      candidates (directories and files), non-overlapping
+  sandbox.py      the only place anything is removed
+  verifier.py, manifest.py, report.py, cli.py, adapters/
 tests/            unit + end-to-end tests (python -m unittest)
-benchmarks/       demo generator; bd_real/ release-gate workspace + checker
-docs/             SAFETY, EXPERIMENT_MODEL, THREAT_MODEL, BD-REAL, BD-PRIOR
+benchmarks/       bd_zero/ and bd_real/ release gates, demo generator
+docs/             SAFETY, EXPERIMENT_MODEL, THREAT_MODEL, BD-ZERO, BD-REAL, BD-PRIOR
 ```
 
 ## Requirements
 
-Python 3.9+, no dependencies. Tested on Windows 10 with Python 3.10.
+Python 3.9+ with no dependencies. `git` is optional (used for the IN GIT proofs). Tested on Windows 10 with Python 3.10.
 
 ## License
 

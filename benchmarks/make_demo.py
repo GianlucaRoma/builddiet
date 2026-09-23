@@ -1,8 +1,7 @@
 """Create a demo workspace that shows what BuildDiet finds.
 
     python benchmarks/make_demo.py <dir>
-    builddiet init <dir>/demo -y
-    builddiet analyze <dir>/demo
+    builddiet analyze <dir>/demo --min-size 100KB
     builddiet plan <dir>/demo --free 3MB
 
 The workspace mimics a project with canonical inputs, cheap and expensive
@@ -13,6 +12,7 @@ derived data, a project-specific directory no cleaner catalog knows
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -63,11 +63,10 @@ def main() -> int:
     (root / "Makefile").write_text(
         f"all:\n\t{sys.executable} scripts/build.py\n\ntest:\n\t{sys.executable} scripts/test.py\n"
     )
+    subprocess.run([sys.executable, "scripts/build.py"], cwd=root, check=True)
     print(f"demo workspace created at {root}")
     print("next:")
-    print(f'  builddiet init "{root}" -y --regenerate "python scripts/build.py" '
-          f'--verify "python scripts/test.py" --min-size 100KB')
-    print(f'  builddiet analyze "{root}"')
+    print(f'  builddiet analyze "{root}" --min-size 100KB')
     print(f'  builddiet plan "{root}" --free 3MB')
     return 0
 

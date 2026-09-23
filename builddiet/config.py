@@ -51,8 +51,8 @@ class Config:
     hash_mode: str = "full"
     reuse: dict = field(default_factory=dict)
 
-    def validate(self) -> "Config":
-        if not (self.regenerate or self.verify):
+    def validate(self, require_workflow: bool = True) -> "Config":
+        if require_workflow and not (self.regenerate or self.verify):
             raise ConfigError(
                 "no workflow configured: set a regenerate and/or verify command "
                 "(run `builddiet init`)"

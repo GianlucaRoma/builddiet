@@ -60,10 +60,20 @@ The audit was done on 2026-09-23. It is not a legal freedom-to-operate opinion.
 
 Absence of evidence from a search of this size is **not** proof of novelty.
 
+## Addendum: zero-configuration mode (levels 0 and 1)
+
+After this audit, BuildDiet gained hash proofs (level 0) and discovered recipes (level 1). Both have clear prior art:
+
+* **Duplicate files and directories by hash** are standard in duplicate finders: [rmlint](https://rmlint.readthedocs.io/en/latest/rmlint.1.html) (including duplicate directories), [czkawka](https://github.com/qarmin/czkawka), [fclones](https://github.com/pkolaczk/fclones), jdupes. Restoring from git or from an archive is ordinary tooling.
+* **Recovering how a file was produced** from execution traces is done by [Sciunit](https://arxiv.org/pdf/1707.05731) and ReproZip. [cmdline_provenance](https://github.com/DamienIrving/cmdline_provenance) records the producing commands inside output files.
+* **Mining AI-agent session logs** (Codex, Claude Code) for candidate recipes: no prior work found, but this is a thin data-source idea, not a claim worth making.
+
+The claim stays narrow. What differs is not any single technique but *proving* regenerability of existing, unmanaged files by byte-identical regeneration, with no side effects allowed, from evidence found automatically, and then *jointly verifying* the cheapest reclaim plan.
+
 ## Recommended wording
 
 Use:
 
-> BuildDiet establishes by experiment, not by declaration or catalog, which parts of an existing workspace your own workflow can regenerate. It measures what each costs to rebuild and plans the cheapest proven way to reclaim space. Cost-aware reclamation of derived data is well established (e.g. Nectar, OSDI 2010). We are not aware of prior work that establishes regenerability of unmanaged data by removal experiments and feeds the measured costs into such a plan. See docs/BD-PRIOR.md.
+> BuildDiet establishes by experiment, not by declaration or catalog, which parts of an existing workspace can be brought back byte-for-byte (from copies, archives, git, or recipes it discovers). It measures what each costs and plans the cheapest jointly verified way to reclaim space. Cost-aware reclamation of derived data is well established (e.g. Nectar, OSDI 2010). We are not aware of prior work that establishes regenerability of unmanaged data by removal experiments and feeds the measured costs into such a plan. See docs/BD-PRIOR.md.
 
 Do not use: "new", "first", "unique", "novel", or "nobody has done this".

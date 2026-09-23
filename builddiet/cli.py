@@ -11,14 +11,15 @@ from pathlib import Path
 from . import __version__
 from . import adapters as adapters_mod
 from . import manifest as manifest_mod
-from .config import Config, ConfigError, config_path, load_config, write_config
+from .config import Config, ConfigError, load_config, write_config
+from .agentlogs import default_log_dirs
 from .experiment import AnalysisError, analyze, verify_joint
 from .model import BUCKET_REGENERABLE, bucket, display
 from .planner import PlanSearch, collect_items, search_verified, size_first, solve
 from .report import render_backup, render_plan, render_report, render_scan, table
 from .sandbox import SandboxError
 from .scanner import scan
-from .units import format_size, parse_size
+from .units import format_size, parse_size, shorten
 
 
 def _log(msg: str) -> None:
@@ -75,9 +76,9 @@ def _effective_config(args) -> Config:
         cfg.min_size = parse_size(args.min_size)
     for inc in args.include or []:
         cfg.include.append(inc)
-    if not cfg.regenerate and not cfg.verify and not config_path(root).exists():
-        raise ConfigError(f"{root} has no BuildDiet config: run `builddiet init` first")
-    return cfg.validate()
+    if args.depth:
+        cfg.depth = args.depth
+    return cfg.validate(require_workflow=False)
 
 
 def cmd_analyze(args) -> int:
@@ -91,6 +92,9 @@ def cmd_analyze(args) -> int:
         n = sum(1 for r in regions if r.status == "candidate")
         print(f"\n{n} candidates would be experimented on. Nothing was run.")
         return 0
+    agent_dirs = None
+    if args.agent_logs or args.agent_logs_dir:
+        agent_dirs = [Path(d) for d in args.agent_logs_dir] if args.agent_logs_dir else default_log_dirs()
     manifest = analyze(
         root,
         cfg,
@@ -99,11 +103,36 @@ def cmd_analyze(args) -> int:
         only=args.only,
         force=args.force,
         log=_log,
+        recipes_enabled=not args.no_recipes,
+        agent_log_dirs=agent_dirs,
+        confirm=lambda found, rejected: _confirm_recipes(found, rejected, args.yes),
+        max_tries=args.max_tries,
     )
     if not args.no_save:
         _log(f"saved     {manifest_mod.save(root, manifest)}")
     print(json.dumps(manifest, indent=2) if args.json else render_report(manifest))
     return 0
+
+
+def _confirm_recipes(found: list, rejected: list, yes: bool) -> bool:
+    _log("")
+    _log(f"Found {len(found)} possible recipes. They run ONLY inside a sandbox copy;")
+    _log("a file counts as proven only if a recipe recreates it byte-for-byte")
+    _log("without changing anything else.")
+    for r in sorted(found, key=lambda r: -r.strength)[:30]:
+        where = f" (in {r.cwd})" if r.cwd else ""
+        _log(f"  {shorten(r.command + where, 90)}   <- {r.origin}")
+    if len(found) > 30:
+        _log(f"  ... and {len(found) - 30} more")
+    for command, reason in rejected[:10]:
+        _log(f"  never run: {shorten(command, 70)}   <- {reason}")
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        _log("Not run: use --yes to allow these commands in non-interactive mode.")
+        return False
+    answer = input("Try them in the sandbox? [Y/n] ").strip().lower()
+    return answer in ("", "y", "yes", "s", "si")
 
 
 def _load_with_warning(root: Path) -> dict:
@@ -144,7 +173,7 @@ def cmd_plan(args) -> int:
                 skipped.append(f"{m['name']}: stale ({'; '.join(reasons)}); use --allow-stale")
                 continue
             manifests.append(m)
-    items = collect_items(manifests, strict=args.strict)
+    items = collect_items(manifests, strict=args.strict, include_git=args.include_git)
     by_root = {str(Path(m["project"])): m for m in manifests}
 
     def verify_group(root: str, group: list):
@@ -154,9 +183,9 @@ def cmd_plan(args) -> int:
             verify=m["commands"].get("verify"),
             hash_mode=m.get("hash_mode", "full"),
         )
-        identities = {e["path"]: e.get("identity") for e in m["entries"]}
+        by_path = {e["path"]: e for e in m["entries"]}
         return verify_joint(
-            Path(root), cfg, [i.path for i in group], identities,
+            Path(root), cfg, [by_path[i.path] for i in group],
             total_bytes=m["total_bytes"],
             sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
             force=args.force,
@@ -216,7 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"builddiet {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("init", help="create .builddiet/config.toml with the verification workflow")
+    p = sub.add_parser("init", help="optional: declare a build + verify workflow (advanced mode)")
     p.add_argument("path", nargs="?", default=".")
     p.add_argument("--regenerate", help="command that recreates derived data")
     p.add_argument("--verify", help="command whose success defines 'still works'")
@@ -225,15 +254,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="overwrite an existing config")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("analyze", help="run deletion experiments in a sandbox copy")
+    p = sub.add_parser("analyze", help="prove what can be deleted (no configuration needed)")
     p.add_argument("path", nargs="?", default=".")
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="run the discovered recipes (in the sandbox) without asking")
+    p.add_argument("--no-recipes", action="store_true",
+                   help="only hash proofs: identical copies, archives, git (runs nothing)")
+    p.add_argument("--agent-logs", action="store_true",
+                   help="also look for recipes in Codex / Claude Code session logs (read locally)")
+    p.add_argument("--agent-logs-dir", action="append",
+                   help="read agent session logs from this directory instead of the defaults")
+    p.add_argument("--max-tries", type=int, default=3, help="recipes tried per candidate (default 3)")
+    p.add_argument("--depth", type=int, help="candidate depth (default 1: top-level entries)")
     p.add_argument("--regenerate", help="override the configured regenerate command")
     p.add_argument("--verify", help="override the configured verify command")
     p.add_argument("--include", action="append", help="extra directory to test (repeatable)")
     p.add_argument("--only", action="append", help="experiment only on this candidate (repeatable)")
     p.add_argument("--min-size", help="override candidates.min_size")
     p.add_argument("--hash", choices=("full", "meta"), help="identity check strength")
-    p.add_argument("--timeout", type=int, help="seconds allowed per workflow run")
+    p.add_argument("--timeout", type=int, help="seconds allowed per workflow or recipe run")
     p.add_argument("--sandbox-dir", help="where to create the sandbox (outside the project)")
     p.add_argument("--keep-sandbox", action="store_true", help="keep the sandbox and logs")
     p.add_argument("--force", action="store_true", help="skip the free-space check")
@@ -251,6 +290,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
     p.add_argument("--free", required=True, help="space to reclaim, e.g. 20GB")
     p.add_argument("--strict", action="store_true", help="only byte-identical regenerations")
+    p.add_argument("--include-git", action="store_true",
+                   help="also plan files that are tracked and clean in git (usually source code)")
     p.add_argument("--allow-stale", action="store_true", help="use analyses whose environment changed")
     p.add_argument("--no-verify", action="store_true",
                    help="show the candidate plan without the joint sandbox verification")
@@ -273,6 +314,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:  # never crash on a console that cannot show a character (e.g. cp1252)
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

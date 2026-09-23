@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .model import (
+    BUCKET_IN_GIT,
     BUCKET_KNOWN,
     BUCKET_LABELS,
     BUCKET_NOT_REGENERATED,
@@ -16,8 +17,9 @@ from .model import (
     bucket,
     bucket_totals,
     display,
+    how,
 )
-from .units import format_duration, format_size
+from .units import format_duration, format_size, shorten
 
 RULE = "-" * 64
 
@@ -48,18 +50,26 @@ def render_report(m: dict) -> str:
     by_bucket = {b: [e for e in entries if bucket(e) == b] for b in BUCKET_ORDER}
     totals = bucket_totals(entries)
     cmds = m["commands"]
-    lines = [
-        f"BUILDDIET - {m['name']}",
-        m["project"],
-        f"analyzed {m['created']}",
-        f"regenerate: {cmds.get('regenerate') or '-'}",
-        f"verify:     {cmds.get('verify') or '-'}",
-        f"baseline:   cold {format_duration(m['baseline']['cold_seconds'])}, "
-        f"warm {format_duration(m['baseline']['warm_seconds'])}",
+    lines = [f"BUILDDIET - {m['name']}", m["project"], f"analyzed {m['created']}"]
+    mode = m.get("mode", "workflow")
+    labels = dict(BUCKET_LABELS)
+    if mode != "workflow":
+        labels[BUCKET_NOT_REGENERATED] = "NOT PROVEN (keep)"
+    if cmds.get("regenerate") or cmds.get("verify"):
+        lines += [f"regenerate: {cmds.get('regenerate') or '-'}", f"verify:     {cmds.get('verify') or '-'}"]
+    if m.get("baseline"):
+        lines.append(f"baseline:   cold {format_duration(m['baseline']['cold_seconds'])}, "
+                     f"warm {format_duration(m['baseline']['warm_seconds'])}")
+    lines.append({
+        "hash-only": "mode:       hash proofs only (identical copies, archives, git)",
+        "recipes": "mode:       hash proofs + discovered recipes (byte-identical regeneration)",
+        "workflow": "mode:       hash proofs + your declared workflow",
+    }.get(mode, f"mode:       {mode}"))
+    lines += [
         "",
         table(
             [["Total workspace", format_size(m["total_bytes"])]]
-            + [[BUCKET_LABELS[b], format_size(totals[b])] for b in BUCKET_ORDER],
+            + [[labels[b], format_size(totals[b])] for b in BUCKET_ORDER if totals[b]],
             right=(1,),
         ),
     ]
@@ -68,24 +78,31 @@ def render_report(m: dict) -> str:
     lines += ["", RULE, "SPACE YOU CAN PROVABLY RECLAIM", RULE]
     if proven:
         rows = [
-            [display(e), format_size(e["bytes"]), format_duration(e["rebuild_seconds"]), e["identity"]]
+            [display(e), format_size(e["bytes"]), format_duration(e["rebuild_seconds"]), shorten(how(e), 70)]
             for e in proven
         ]
         rows.append(["TOTAL", format_size(totals[BUCKET_REGENERABLE]),
                      format_duration(sum(e["rebuild_seconds"] or 0 for e in proven)), ""])
-        lines.append(table(rows, ["path", "size", "rebuild", "identity"], right=(1, 2)))
+        lines.append(table(rows, ["path", "size", "rebuild", "how to get it back"], right=(1, 2)))
     else:
         lines.append("  nothing proven regenerable yet")
 
+    not_regenerated = (
+        "NOT REGENERATED - the workflow passes without these, but nothing\n"
+        "recreates them. That is NOT proof they are disposable. Keep them."
+        if mode == "workflow" else
+        "NOT PROVEN - no identical copy, archive, git source or discovered recipe\n"
+        "recreates these. Keep them (or declare a workflow with `builddiet init`)."
+    )
     sections = [
         (BUCKET_REQUIRED, "REQUIRED - removing these breaks the workflow"),
-        (BUCKET_NOT_REGENERATED,
-         "NOT REGENERATED - the workflow passes without these, but nothing\n"
-         "recreates them. That is NOT proof they are disposable. Keep them."),
+        (BUCKET_NOT_REGENERATED, not_regenerated),
         (BUCKET_STALE,
-         "STALE - the workflow recreates these, but deterministically with DIFFERENT\n"
+         "STALE - these can be regenerated, but deterministically with DIFFERENT\n"
          "bytes than your current copy: stale or corrupt output, or hand edits.\n"
          "Excluded from plans. Review before deleting."),
+        (BUCKET_IN_GIT, "IN GIT - tracked and clean; `git checkout` restores them byte-for-byte.\n"
+                        "Not planned unless you pass --include-git."),
         (BUCKET_KNOWN, "KNOWN - catalog says regenerable by convention; not proven here"),
         (BUCKET_UNKNOWN, "UNKNOWN / NOT TESTED"),
     ]
@@ -97,10 +114,20 @@ def render_report(m: dict) -> str:
         rows = []
         for e in group[:25]:
             note = e.get("known") if key == BUCKET_KNOWN else e.get("detail", "")
-            rows.append([display(e), format_size(e["bytes"]), note or ""])
+            rows.append([display(e), format_size(e["bytes"]), shorten(note or "", 110)])
         lines.append(table(rows, right=(1,)))
         if len(group) > 25:
             lines.append(f"  ... and {len(group) - 25} more")
+
+    tried = m.get("recipes") or []
+    skipped = m.get("rejected_recipes") or []
+    if tried or skipped:
+        lines += ["", RULE, "RECIPES (found automatically, run only in the sandbox)", RULE]
+        for r in tried:
+            state = "usable" if r["usable"] else f"rejected: {shorten(r['reason'], 60)}"
+            lines.append(f"  {shorten(r['command'], 60)}   <- {r['origin']}   [{state}]")
+        for r in skipped:
+            lines.append(f"  {shorten(r['command'], 60)}   [never run: {r['reason']}]")
 
     if m.get("warnings"):
         lines += ["", RULE, "WARNINGS", RULE] + [f"  ! {w}" for w in m["warnings"]]
@@ -109,15 +136,16 @@ def render_report(m: dict) -> str:
 
 
 def _plan_table(plan, multi: bool) -> str:
-    headers = (["project"] if multi else []) + ["path", "size", "rebuild", "p(reuse)", "expected"]
+    headers = (["project"] if multi else []) + ["path", "size", "rebuild", "p(reuse)", "expected",
+                                                  "how to get it back"]
     rows = []
     for i in plan.items:
         row = [i.project] if multi else []
         row += [display(i), format_size(i.bytes), format_duration(i.rebuild_seconds),
-                f"{i.reuse:.2f}", format_duration(i.cost)]
+                f"{i.reuse:.2f}", format_duration(i.cost), shorten(i.how, 50)]
         rows.append(row)
     total = ["TOTAL", ""] if multi else ["TOTAL"]
-    total += [format_size(plan.freed), format_duration(plan.rebuild_seconds), "", format_duration(plan.cost)]
+    total += [format_size(plan.freed), format_duration(plan.rebuild_seconds), "", format_duration(plan.cost), ""]
     rows.append(total)
     offset = 1 if multi else 0
     return table(rows, headers, right=tuple(c + offset for c in (1, 2, 3, 4)))
@@ -180,9 +208,9 @@ def render_plan(search, naive=None, skipped=(), multi=False, verified_requested=
         "=" * 64,
         _plan_table(plan, multi),
         "",
-        f"  Frees {format_size(plan.freed)}. All items were removed together in a sandbox:",
-        f"  the workflow recreated them and verify passed. Measured joint rebuild "
-        f"{format_duration(sum(joint))} (individual estimates sum to {format_duration(plan.rebuild_seconds)}).",
+        f"  Frees {format_size(plan.freed)}. Removed together, every item came back byte-for-byte",
+        f"  (see the joint check above). Measured joint rebuild {format_duration(sum(joint))}; "
+        f"individual estimates sum to {format_duration(plan.rebuild_seconds)}.",
     ]
     # only mention it when the difference is above timing noise
     if naive is not None and naive.feasible and naive.cost - plan.cost > max(0.05, 0.05 * plan.cost):
@@ -204,6 +232,7 @@ def render_backup(m: dict) -> str:
             [
                 ["MUST BACK UP (irreproducible or unproven)", format_size(must_total)],
                 ["REGENERABLE (proven)", format_size(totals[BUCKET_REGENERABLE])],
+                ["IN GIT (restorable from the repository)", format_size(totals[BUCKET_IN_GIT])],
                 ["KNOWN (by convention, not proven)", format_size(totals[BUCKET_KNOWN])],
             ],
             right=(1,),

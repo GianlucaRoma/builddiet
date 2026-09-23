@@ -61,3 +61,9 @@ def format_duration(seconds: Optional[float]) -> str:
         return f"{m}m{s:02d}s"
     h, m = divmod(m, 60)
     return f"{h}h{m:02d}m"
+
+
+def shorten(text: str, limit: int = 60) -> str:
+    """One line, at most ``limit`` characters."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 3] + "..."

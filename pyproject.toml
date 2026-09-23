@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "builddiet"
 version = "0.1.0"
-description = "Experimentally prove which parts of a workspace are regenerable, measure what they cost to rebuild, and plan the cheapest way to reclaim disk space."
+description = "Point it at a folder: it proves by experiment what can be brought back byte-for-byte, what that costs, and plans the cheapest verified way to reclaim disk space."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

@@ -4,18 +4,23 @@ BuildDiet exists because people are afraid to delete the wrong thing. It must ne
 
 ## Invariants
 
-1. **The original project is read-only to BuildDiet.** The only file BuildDiet writes there is `.builddiet/` (config and manifest).
-2. **Destruction happens only in the sandbox.** `Sandbox.target()` normalises every path, rejects `..`, absolute paths and the sandbox root itself, and checks that the result resolves inside the sandbox copy. `set_aside`/`restore` go through it.
-3. **The sandbox can't be inside the project.** This is checked at construction, and again before the sandbox is removed.
-4. **No proof without a passing baseline.** The workflow must pass on the untouched copy twice (cold and warm). Otherwise the analysis aborts.
-5. **"Not required" is not "disposable".** A candidate counts as PROVEN only if the workflow recreated all of its files and verify passed. A candidate that the workflow simply ignores is reported as NOT REGENERATED and is never offered for reclaiming.
-5b. **"Regenerable" is not "your bytes are regenerable".** Identity is checked against the user's original bytes, which are fingerprinted before any workflow run. If the workflow reproducibly produces something different (a stale or corrupt output, or hand edits), the verdict is STALE and the candidate is never offered.
-6. **Proofs expire.** The manifest records the platform, git HEAD, a hash of top-level project files, and the config digest. `plan` refuses stale proofs unless `--allow-stale` is passed.
-6b. **Plans are verified jointly.** `plan` presents a set as a JOINTLY VERIFIED PLAN only after removing all of its items together in a sandbox and re-checking the PROVEN invariants. A set that fails is shown as a rejected candidate and is never presented as safe. `--no-verify` output is labelled NOT JOINTLY VERIFIED.
-7. **v0.1 does not delete.** `plan` prints a list. You decide.
+1. **The original project is read-only to BuildDiet.** The only thing BuildDiet writes there is `.builddiet/` (config and manifest). If anything else in the original changes during an analysis or a joint check, the report warns, and a joint check fails.
+2. **Destruction happens only in the sandbox.** `Sandbox.target()` normalises every path, rejects `..`, absolute paths and the sandbox root itself, and checks that the result resolves inside the sandbox copy. Every removal and every restore goes through it.
+3. **The sandbox is never inside the project.** This is checked when the sandbox is created and again before it is removed.
+4. **Hashes, not names.** Level-0 proofs compare SHA-256 of real bytes: archive members are decompressed, and git content is rendered through the checkout filters.
+5. **"Not needed" is not "disposable".** Something the project runs fine without, but that nothing recreates, is NOT PROVEN / NOT REGENERATED and is never planned.
+6. **"Regenerable" is not "your bytes are regenerable".** Every comparison is against the user's original bytes. A deterministic regeneration that differs from them is STALE and is never planned.
+7. **Recipes must not touch anything else.** A discovered recipe proves nothing if it changes any other existing file. The only exception is volatile files (`*.log`, `logs/`, `__pycache__/`, `*.pyc`, tool caches).
+8. **Dangerous commands are never run.** Discovered commands that change git state, delete files, move data over the network, publish, install packages, drive containers or cloud tools, administer the system, or use absolute paths outside the project are refused, whatever their source.
+9. **The user approves discovered commands.** They are listed, with their evidence, before anything runs. In non-interactive use nothing runs without `--yes`.
+10. **Agent logs are opt-in and local.** Nothing reads `~/.codex` or `~/.claude` unless you pass `--agent-logs` (or `--agent-logs-dir`). Only commands whose working directory is inside the analyzed project are kept. Nothing is sent anywhere.
+11. **Plans are verified jointly.** A set is presented as a JOINTLY VERIFIED PLAN only after all of its items have been removed together in a sandbox and restored byte-for-byte. `--no-verify` output is labelled NOT JOINTLY VERIFIED.
+12. **Proofs expire.** The manifest records the platform, git HEAD, a hash of the top-level project files, and the config. `plan` refuses stale analyses unless you pass `--allow-stale`. Level-0 sources are re-checked when a plan is verified.
+13. **v0.1 does not delete.** `plan` prints a list. You decide.
 
 ## What BuildDiet can't protect you from
 
-* **Commands with side effects outside the project.** Your regenerate and verify commands run for real, in the sandbox directory. If they write through absolute paths, push to a registry, send emails or drop a database, they will do that for real. BuildDiet detects writes to the *original project* and warns, but it can't see the rest of your machine. See [THREAT_MODEL.md](THREAT_MODEL.md).
-* **A weak verify command.** A PROVEN verdict means "recreated, and your gate passed". If your gate is `true`, the proof is only as strong as that.
-* **Hidden inputs.** If regeneration downloads something from the network today, the proof assumes it will still be downloadable tomorrow. Consider this before deleting data that depends on remote artifacts.
+* **Side effects outside the project.** Recipes and workflow commands run for real in the sandbox directory. BuildDiet refuses the obvious dangerous categories and detects writes to the original project. It cannot see a script that, say, calls a web API or writes to a database. Read the recipe list before you approve it.
+* **A weak verify command** (level 2). There, a PROVEN verdict means "recreated, and your verify command passed".
+* **Hidden inputs.** If a recipe downloads something today, the proof assumes it will still be downloadable tomorrow.
+* **Deleting part of a plan.** A verified plan is verified as a whole.

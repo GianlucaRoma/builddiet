@@ -110,8 +110,10 @@ class JointPlanTest(unittest.TestCase):
         candidate, verified = text.split("\nJOINTLY VERIFIED PLAN\n")
         self.assertIn("CANDIDATE PLAN #1", candidate)
         self.assertIn("joint check FAILED", candidate)
-        self.assertIn("c.bin", verified)
-        self.assertFalse(all(m in verified for m in MIRRORS))
+        planned = {line.split()[0] for line in verified.splitlines()
+                   if line.startswith("  ") and line.split() and line.split()[0] in MIRRORS | {"c.bin"}}
+        self.assertIn("c.bin", planned)
+        self.assertFalse(MIRRORS <= planned)
 
     def test_no_verify_is_labelled_unverified(self):
         code, text = self.plan("--free", "15KB", "--no-verify")

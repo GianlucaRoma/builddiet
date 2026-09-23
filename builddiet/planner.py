@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .cost import expected_penalty, reuse_probability
-from .model import PROVEN
+from .model import IN_GIT, PROVEN, how
 from .verifier import IDENTICAL
 
 RESOLUTION = 4000
@@ -37,6 +37,7 @@ class PlanItem:
     reuse: float = 1.0
     identity: str = IDENTICAL
     kind: str = "dir"
+    how: str = ""
 
     @property
     def cost(self) -> float:
@@ -53,6 +54,7 @@ class PlanItem:
             "expected_seconds": self.cost,
             "identity": self.identity,
             "kind": self.kind,
+            "how": self.how,
         }
 
 
@@ -85,14 +87,15 @@ class Plan:
         }
 
 
-def collect_items(manifests, strict: bool = False) -> list:
-    """PROVEN entries that still exist on disk, as plan items."""
+def collect_items(manifests, strict: bool = False, include_git: bool = False) -> list:
+    """PROVEN entries (and IN_GIT ones, if asked) that still exist on disk, as plan items."""
+    allowed = {PROVEN, IN_GIT} if include_git else {PROVEN}
     items = []
     for m in manifests:
         root = Path(m["project"])
         reuse = m.get("reuse", {})
         for e in m["entries"]:
-            if e["verdict"] != PROVEN or e["bytes"] <= 0:
+            if e["verdict"] not in allowed or e["bytes"] <= 0:
                 continue
             if strict and e.get("identity") != IDENTICAL:
                 continue
@@ -108,6 +111,7 @@ def collect_items(manifests, strict: bool = False) -> list:
                     reuse=reuse_probability(reuse, e["path"]),
                     identity=e.get("identity") or IDENTICAL,
                     kind=e.get("kind", "dir"),
+                    how=how(e),
                 )
             )
     return items

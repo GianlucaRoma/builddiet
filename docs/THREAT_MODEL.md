@@ -3,21 +3,26 @@
 ## Assets
 
 1. **The user's original data**, above all the irreproducible source of truth.
-2. **The correctness of a PROVEN verdict**, because users will delete based on it.
+2. **The correctness of a PROVEN verdict and of a JOINTLY VERIFIED PLAN**, because users will delete based on them.
+3. **The user's privacy**, now that BuildDiet can read agent session logs.
 
 ## Threats and mitigations
 
 | Threat | Mitigation |
 |---|---|
 | A BuildDiet bug deletes original files | v0.1 has no delete command. Removal happens only through `Sandbox.target()`, which checks paths. The sandbox can't be inside the project. |
-| Path traversal in config (`include = ["../x"]`) | `normalize_rel` rejects absolute paths, drive letters and `..`. |
-| A workflow command writes to the original through an absolute path | The original's metadata is snapshotted before and after the analysis, and any change triggers a warning in the report. This detects the write but can't prevent it. |
-| A workflow command has external side effects (network, registries, databases, other directories) | Out of scope for v0.1. The user runs their own commands. The docs say this clearly. Future work: run the workflow in a container or under a restricted user. |
-| False PROVEN: the workflow passes without the directory but never recreated it | Identity check: every file must come back, otherwise the verdict is NOT REGENERATED. |
-| False PROVEN: the user's copy is stale or corrupt, but the workflow regenerates a good one | The original is fingerprinted before any run, and differing regenerations are repeated. If they agree the verdict is STALE, which is never planned. |
-| False PROVEN for a combination: items that recreate each other are both planned | Joint check. The whole plan is removed at once in a sandbox and must satisfy the PROVEN invariants; otherwise it is rejected and the next candidate is tried. Covered by `tests/test_joint.py`. |
-| False PROVEN: recreated with wrong content that verify doesn't catch | `identity` distinguishes `identical` from `recreated`, and `plan --strict` uses only byte-identical items. The strength of a proof depends on the verify command. |
-| A stale proof after the toolchain or repo changes | Environment fingerprint in the manifest. `plan` refuses stale manifests unless `--allow-stale`. |
-| A malicious `.builddiet/config.toml` in a cloned repo runs commands | `analyze` runs the configured commands, which is the same trust level as running `make` in that repo. Review the config of repositories you don't trust before analyzing them. |
-| Runaway or hung commands | Per-run timeout, with the process tree killed (`taskkill /T` on Windows, process group on POSIX). The verdict is INCONCLUSIVE. |
-| Full disk during the sandbox copy | A free-space check before copying (`--force` to override). The sandbox is removed even on errors or Ctrl+C. |
+| Path traversal in config or archives (`../x`, `..` members) | `normalize_rel` rejects absolute paths, drive letters and `..`. Archive restores skip members containing `..`. |
+| A discovered command is dangerous (`git push`, `rm -rf`, `curl`, `pip install`, `docker`, ...) | It is refused and listed as "never run" (`recipes.check_safe`), whatever its source. |
+| A discovered command uses an absolute path to the original project, so it would write to the original | Paths to the project are rewritten to `{project}`, which points at the sandbox. Any other absolute path is refused. |
+| A recipe overwrites user data as a side effect (e.g. truncates `data/raw.csv`) | Any change to another existing file disqualifies the recipe for that proof: probes reject recipes that change non-candidate files, and trials reject recipes that change anything outside the tested candidate. Covered by `tests/test_zeroconfig.py`. |
+| False PROVEN: nothing recreated it, but the workflow passes | Identity check: every file must come back. Otherwise the verdict is NOT REGENERATED / NOT PROVEN. |
+| False PROVEN: the user's copy is stale or corrupt, but a good one is regenerated | Comparisons are against the user's bytes, fingerprinted before any run. Differing regenerations are repeated, and if they agree the verdict is STALE, which is never planned. |
+| False PROVEN from a same-size, different-content copy or archive | Level 0 compares SHA-256 of every file (archive members decompressed), not sizes or names. |
+| Two copies are each other's source, and a plan deletes both | Copies never point at each other. The joint check rejects any plan that removes a recovery's source. |
+| Items that recreate each other are both planned | Joint check: the whole plan is removed at once and must be restored byte-for-byte, or the plan is rejected and the next candidate is tried. Covered by `tests/test_joint.py`. |
+| A recovery source changes after the analysis | The source is re-checked when a plan is verified (size/mtime, or a re-hash for directories). |
+| Agent logs expose other projects' commands | Logs are read only with `--agent-logs`. Only commands whose working directory is inside the analyzed project are kept. Nothing leaves the machine. The logs are read, never modified. |
+| A malicious `.builddiet/config.toml` or README in a cloned repo | Workflow commands from a config run as they would with `make`, so review untrusted configs. Discovered commands are shown for approval and pass the refusal list. |
+| A stale proof after the repo or toolchain changes | Environment fingerprint in the manifest. `plan` refuses stale manifests unless `--allow-stale`. |
+| Runaway or hung commands | A per-run timeout kills the process tree. The verdict is INCONCLUSIVE, or the recipe is skipped. |
+| Full disk during a sandbox copy | A free-space check runs before copying (`--sandbox-dir` to use another drive, `--force` to override). Sandboxes are removed even on errors or Ctrl+C. |

@@ -4,6 +4,8 @@
 
 The gate was re-run on 2026-09-23 after joint-plan verification was added; the results below are from that run.
 
+**Re-run with the final v0.1 code** (levels 0/1 added, the workflow mode here is level 2): the result was again 12/12. Plans for 1 MB, 2 MB and 6 MB were jointly verified, with joint rebuild 0.0s / 0.4s / 0.7s against sums of 0.0s / 0.4s / 0.6s. The original was unchanged and no sandbox was left behind. Absolute sizes vary slightly between runs, because the generator draws a new random corpus each time. This run could prove at most 8.1 MB, compared with 8.3 MB below.
+
 Run on 2026-09-23 with Windows 10 (19045) and Python 3.10.2. The workspace was isolated in `D:\builddiet-bdreal\`, and the sandboxes were on the same drive, in `D:\builddiet-bdreal\sandboxes\`. No other project was touched.
 
 ## Reproduce
