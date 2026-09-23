@@ -25,6 +25,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import fs
 from .scanner import CANDIDATE, METADATA_DIRS
 
 DUPLICATE = "duplicate"
@@ -89,14 +90,13 @@ def _within(rel: str, container: str) -> bool:
 def _files(path: Path) -> dict:
     """{relative posix path: (size, absolute path)} of regular files, links skipped."""
     out = {}
-    if path.is_file() and not path.is_symlink():
+    if path.is_file() and not fs.is_link(path):
         out[path.name] = (path.stat().st_size, str(path))
         return out
-    for dirpath, dirnames, filenames in os.walk(path):
-        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+    for dirpath, dirnames, filenames in fs.walk(path):
         for name in filenames:
             full = os.path.join(dirpath, name)
-            if os.path.islink(full):
+            if fs.is_link(full):
                 continue
             try:
                 out[os.path.relpath(full, path).replace(os.sep, "/")] = (os.path.getsize(full), full)
@@ -105,17 +105,18 @@ def _files(path: Path) -> dict:
     return out
 
 
-def _index(root: Path) -> tuple:
+def _index(root: Path, guard=None) -> tuple:
     """Size index of every file in the project, and the list of archives."""
     by_size: dict = {}
     archives = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in fs.walk(root):
         if os.path.abspath(dirpath) == os.path.abspath(root):
             dirnames[:] = [d for d in dirnames if d not in METADATA_DIRS]
-        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+        if guard is not None:
+            dirnames[:] = [d for d in dirnames if guard.status(os.path.join(dirpath, d)) == "clear"]
         for name in filenames:
             full = os.path.join(dirpath, name)
-            if os.path.islink(full):
+            if fs.is_link(full):
                 continue
             try:
                 size = os.path.getsize(full)
@@ -159,7 +160,7 @@ def _dir_signature(files: dict, hasher: Hasher) -> str:
 
 
 def _find_duplicate(root: Path, rel: str, files: dict, by_size: dict, hasher: Hasher,
-                    taken: set) -> Optional[Recovery]:
+                    taken: set, guard=None) -> Optional[Recovery]:
     if not files:
         return None
     anchor_rel, (anchor_size, anchor_full) = max(files.items(), key=lambda kv: kv[1][0])
@@ -179,6 +180,8 @@ def _find_duplicate(root: Path, rel: str, files: dict, by_size: dict, hasher: Ha
             twin = other_rel[: -len(anchor_rel)].rstrip("/")
             if not twin or _within(rel, twin) or _within(twin, rel):
                 continue
+            if guard is not None and not guard.allows_touch(root / twin):
+                continue  # never read a folder that is, or contains, a protected area
             twin_files = _files(root / twin)
             if set(twin_files) != set(files) or any(
                 twin_files[k][0] != files[k][0] for k in files
@@ -360,7 +363,7 @@ def restore(recovery: dict, project: Path, target_rel: str) -> None:
     if method == DUPLICATE:
         source = project / recovery["source"]
         if source.is_dir():
-            shutil.copytree(source, target, symlinks=True)
+            fs.copytree(source, target)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
@@ -404,21 +407,22 @@ def restore(recovery: dict, project: Path, target_rel: str) -> None:
 
 # ---------------------------------------------------------------------- entry
 
-def find_recoverable(root: Path, regions: list, log: Callable[[str], None] = lambda _m: None) -> dict:
+def find_recoverable(root: Path, regions: list, log: Callable[[str], None] = lambda _m: None,
+                     guard=None) -> dict:
     """{candidate path: Recovery} for every CANDIDATE region provably recoverable."""
     root = Path(root).resolve()
     targets = [r for r in regions if r.status == CANDIDATE]
     if not targets:
         return {}
     hasher = Hasher()
-    by_size, archives = _index(root)
+    by_size, archives = _index(root, guard)
     clean = _git_clean_files(root) if (root / ".git").exists() else None
     member_cache: dict = {}
     found: dict = {}
     for region in sorted(targets, key=lambda r: r.path):
         files = _files(root / region.path)
         recovery = (
-            _find_duplicate(root, region.path, files, by_size, hasher, set(found))
+            _find_duplicate(root, region.path, files, by_size, hasher, set(found), guard)
             or (_find_git(root, region.path, files, clean, hasher) if clean else None)
             or _find_archive(root, region.path, files, archives, hasher, member_cache)
         )

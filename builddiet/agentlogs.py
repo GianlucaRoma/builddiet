@@ -96,19 +96,26 @@ def _inside(path: str, root: Path) -> bool:
         return False
 
 
-def commands_for(root: Path, log_dirs: Optional[list] = None) -> list:
-    """Commands logged by agents with a working directory inside ``root``."""
+def commands_for(root: Path, log_dirs: Optional[list] = None, guard=None) -> list:
+    """Commands logged by agents with a working directory inside ``root``.
+    Log folders or files that are protected (``guard``) are not read."""
+    from . import fs
+
     root = Path(root).resolve()
     found = []
     for base in log_dirs if log_dirs is not None else default_log_dirs():
         base = Path(base)
-        if not base.is_dir():
+        if not base.is_dir() or (guard is not None and guard.status(base) != "clear"):
             continue
-        for dirpath, _dirs, filenames in os.walk(base):
+        for dirpath, dirs, filenames in fs.walk(base):
+            if guard is not None:
+                dirs[:] = [d for d in dirs if guard.status(os.path.join(dirpath, d)) == "clear"]
             for name in filenames:
                 if not name.endswith(".jsonl"):
                     continue
                 path = os.path.join(dirpath, name)
+                if guard is not None and guard.status(path) != "clear":
+                    continue
                 try:
                     if os.path.getsize(path) > _MAX_FILE_BYTES:
                         continue

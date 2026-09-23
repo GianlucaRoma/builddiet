@@ -9,12 +9,11 @@ from __future__ import annotations
 
 import os
 import shutil
-import stat
-import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
 
+from . import fs
 from .config import CONFIG_DIR, normalize_rel
 
 PREFIX = "builddiet-"
@@ -32,24 +31,9 @@ def is_within(child: Path, parent: Path) -> bool:
         return False
 
 
-def _make_writable_and_retry(func, path, _exc):
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
-
-
 def force_remove(path: Path) -> None:
-    path = str(path)
-    if os.path.islink(path) or not os.path.isdir(path):
-        try:
-            os.unlink(path)
-        except PermissionError:
-            os.chmod(path, stat.S_IWRITE)
-            os.unlink(path)
-        return
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_make_writable_and_retry)
-    else:
-        shutil.rmtree(path, onerror=_make_writable_and_retry)
+    """Delete a file or tree; links (symlinks, junctions) are removed, never followed."""
+    fs.remove(path)
 
 
 SANDBOX_ENV = "BUILDDIET_SANDBOX_DIR"
@@ -101,8 +85,9 @@ def default_sandbox_base(project: Optional[Path] = None) -> Path:
 class Sandbox:
     """``with Sandbox(project) as sb: sb.populate(); ...``"""
 
-    def __init__(self, source: Path, base: Optional[Path] = None, keep: bool = False):
+    def __init__(self, source: Path, base: Optional[Path] = None, keep: bool = False, guard=None):
         self.source = Path(source).resolve()
+        self.guard = guard
         self.base = Path(base).resolve() if base else Path(default_sandbox_base(self.source)).resolve()
         if is_within(self.base, self.source):
             raise SandboxError(
@@ -128,14 +113,24 @@ class Sandbox:
             self.destroy()
 
     def populate(self) -> None:
+        """Copy the project. Links are never followed or copied, and protected /
+        excluded areas are not even read."""
         source = str(self.source)
+        guard = self.guard
 
         def ignore(directory, names):
-            if os.path.normcase(os.path.abspath(directory)) == os.path.normcase(source):
-                return [n for n in names if n == CONFIG_DIR]
-            return []
+            skipped = []
+            top = os.path.normcase(os.path.abspath(directory)) == os.path.normcase(source)
+            for n in names:
+                full = os.path.join(directory, n)
+                if top and n == CONFIG_DIR:
+                    skipped.append(n)
+                elif guard is not None and os.path.isdir(full) and not fs.is_link(full) \
+                        and guard.status(full) != "clear":
+                    skipped.append(n)
+            return skipped
 
-        shutil.copytree(source, str(self.project), symlinks=True, ignore=ignore)
+        fs.copytree(source, str(self.project), ignore=ignore)
 
     def target(self, rel: str) -> Path:
         """Absolute path of ``rel`` inside the sandbox copy, with escape checks."""

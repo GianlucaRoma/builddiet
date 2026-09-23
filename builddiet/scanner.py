@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import adapters as adapters_mod
+from . import fs
 from .config import CONFIG_DIR, Config
 
 METADATA_DIRS = (".git", ".hg", ".svn", CONFIG_DIR)
@@ -24,7 +25,14 @@ METADATA = "metadata"
 LOOSE = "loose"
 NOT_SELECTED = "not-selected"
 
+PROTECTED = "protected"
+USER_EXCLUDED = "user-excluded"
+LINK = "link"
+
 STATUS_DETAIL = {
+    PROTECTED: "protected (builddiet protect): never read, never touched",
+    USER_EXCLUDED: "excluded with --exclude: not read, not touched",
+    LINK: "symlink / junction: never followed, never touched",
     CANDIDATE: "not tested",
     EXCLUDED: "excluded by config",
     SMALL: "below min_size, not tested",
@@ -45,29 +53,19 @@ class Region:
 
     @property
     def display(self) -> str:
-        return self.path + "/" if self.kind == "dir" else self.path
+        return self.path + "/" if self.kind in ("dir", "guarded") else self.path
 
 
 def tree_size(path: Path) -> tuple:
     """Total bytes and file count below ``path`` without following links."""
     total = files = 0
-    stack = [str(path)]
-    while stack:
-        current = stack.pop()
-        try:
-            iterator = os.scandir(current)
-        except OSError:
-            continue
-        with iterator:
-            for entry in iterator:
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        stack.append(entry.path)
-                    else:
-                        total += entry.stat(follow_symlinks=False).st_size
-                        files += 1
-                except OSError:
-                    pass
+    for dirpath, _dirs, names in fs.walk(path):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(dirpath, name)).st_size
+                files += 1
+            except OSError:
+                pass
     return total, files
 
 
@@ -76,7 +74,10 @@ def _ancestors(rel: str) -> list:
     return ["/".join(parts[:i]) for i in range(1, len(parts))]
 
 
-def scan(root: Path, cfg: Config, adapters=None) -> list:
+def scan(root: Path, cfg: Config, adapters=None, guard=None) -> list:
+    """Partition ``root``. Protected / excluded areas (``guard``) are listed with
+    their path only: they are never read, sized or offered as candidates, and a
+    folder that contains one is split so that only its unprotected parts count."""
     root = Path(root).resolve()
     if adapters is None:
         adapters = adapters_mod.detect(root)
@@ -106,6 +107,14 @@ def scan(root: Path, cfg: Config, adapters=None) -> list:
             return
         for entry in entries:
             rel = f"{reldir}/{entry.name}" if reldir else entry.name
+            if guard is not None:
+                state = guard.status(entry.path)
+                if state != "clear":  # checked before anything about the entry is read
+                    regions.append(Region(rel, "guarded", 0, 0, PROTECTED if state != "excluded" else USER_EXCLUDED))
+                    continue
+            if fs.is_link(entry):  # symlink / junction: never followed, never a candidate
+                regions.append(Region(rel, "link", 0, 0, LINK))
+                continue
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
                 size = 0 if is_dir else entry.stat(follow_symlinks=False).st_size
@@ -123,7 +132,9 @@ def scan(root: Path, cfg: Config, adapters=None) -> list:
                     loose_bytes += size
                     loose_files += 1
                 continue
-            if not reldir and entry.name in METADATA_DIRS:
+            if guard is not None and guard.contains_guarded(entry.path):
+                visit(rel, level + 1)  # keep the protected part out, look at its siblings
+            elif not reldir and entry.name in METADATA_DIRS:
                 add_dir(rel, METADATA)
             elif excluded(rel):
                 add_dir(rel, EXCLUDED)

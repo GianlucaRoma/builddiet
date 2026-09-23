@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from . import __version__
+from . import __version__, fs
 from .config import CONFIG_DIR, MANIFEST_FILE, Config, load_config
 
 MANIFEST_VERSION = 1
@@ -45,10 +45,17 @@ def git_head(root: Path) -> Optional[str]:
 
 
 def inputs_hash(root: Path) -> str:
-    """Hash of the top-level files (lockfiles, build scripts, manifests...)."""
+    """Hash of the top-level files (lockfiles, build scripts, manifests...).
+    Protected files are represented by their name only, never read."""
+    from .protect import Guard
+
+    guard = Guard()
     h = hashlib.sha256()
     for entry in sorted(os.scandir(root), key=lambda e: e.name):
-        if not entry.is_file(follow_symlinks=False):
+        if not entry.is_file(follow_symlinks=False) or fs.is_link(entry):
+            continue
+        if guard.status(entry.path) != "clear":
+            h.update(f"{entry.name}\0guarded\0".encode())
             continue
         size = entry.stat(follow_symlinks=False).st_size
         h.update(f"{entry.name}\0{size}\0".encode())
@@ -112,12 +119,15 @@ def load(root: Path) -> dict:
     return data
 
 
-def find(path: Path, max_depth: int = 4) -> list:
-    """Project roots at or below ``path`` that contain a manifest."""
+def find(path: Path, max_depth: int = 4, guard=None) -> list:
+    """Project roots at or below ``path`` that contain a manifest. Protected /
+    excluded folders are neither listed nor entered, and links are not followed."""
     path = Path(path).resolve()
     found = []
 
     def walk(current: Path, depth: int) -> None:
+        if guard is not None and guard.status(current) != "clear":
+            return
         if manifest_path(current).is_file():
             found.append(current)
             return
@@ -126,7 +136,7 @@ def find(path: Path, max_depth: int = 4) -> list:
         try:
             children = sorted(
                 e.path for e in os.scandir(current)
-                if e.is_dir(follow_symlinks=False) and not e.name.startswith(".")
+                if not fs.is_link(e) and e.is_dir(follow_symlinks=False) and not e.name.startswith(".")
                 and e.name not in ("node_modules", "target", "__pycache__")
             )
         except OSError:

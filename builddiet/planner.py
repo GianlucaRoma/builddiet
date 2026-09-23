@@ -87,12 +87,15 @@ class Plan:
         }
 
 
-def collect_items(manifests, strict: bool = False, include_git: bool = False) -> list:
-    """PROVEN entries (and IN_GIT ones, if asked) that still exist on disk, as plan items."""
+def collect_items(manifests, strict: bool = False, include_git: bool = False, guard=None) -> list:
+    """PROVEN entries (and IN_GIT ones, if asked) that still exist on disk, as plan items.
+    Anything protected or excluded (``guard``), even if proven earlier, is left out."""
     allowed = {PROVEN, IN_GIT} if include_git else {PROVEN}
     items = []
     for m in manifests:
         root = Path(m["project"])
+        if guard is not None and guard.status(root) != "clear":
+            continue
         reuse = m.get("reuse", {})
         for e in m["entries"]:
             if e["verdict"] not in allowed or e["bytes"] <= 0:
@@ -100,6 +103,8 @@ def collect_items(manifests, strict: bool = False, include_git: bool = False) ->
             if strict and e.get("identity") != IDENTICAL:
                 continue
             if not (root / e["path"]).exists():
+                continue
+            if guard is not None and guard.delete_verdict(root / e["path"]):
                 continue
             items.append(
                 PlanItem(

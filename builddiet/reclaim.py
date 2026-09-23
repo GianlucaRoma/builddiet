@@ -26,6 +26,7 @@ from .config import CONFIG_DIR, normalize_rel
 from .experiment import _workflow_env, run_command, run_workflow
 from .recipes import project_python, render
 from .sandbox import force_remove, is_within
+from .protect import Guard
 from .service import project_config
 from .verifier import fingerprint, signature, snapshot, snapshot_diff
 
@@ -73,26 +74,36 @@ def _target(root: Path, rel: str) -> Path:
     return path
 
 
-def _preflight(root: Path, entries: list) -> Optional[str]:
-    """Why this project's items must not be deleted now, or None."""
+def _preflight(root: Path, entries: list, guard: Guard) -> Optional[str]:
+    """Why this project's items must not be deleted now, or None. Protection is
+    checked first, before anything inside an item is read."""
     for e in entries:
         path = _target(root, e["path"])
+        reason = guard.delete_verdict(path)
+        if reason:
+            return reason
         if not os.path.lexists(path):
             return f"{e['path']} no longer exists"
         if not e.get("signature"):
             return f"{e['path']} has no recorded signature; re-run `builddiet analyze`"
         if signature(fingerprint(path, "full")) != e["signature"]:
             return f"{e['path']} changed since it was proven; re-run `builddiet analyze`"
+        source = (e.get("recovery") or {}).get("source")
+        if source and guard.status(root / source) != "clear":
+            return f"the source of {e['path']} ({source}) is protected or excluded"
         if e.get("recovery") and not level0.source_unchanged(root, e["recovery"]):
             return f"the source of {e['path']} changed since the analysis"
     return None
 
 
-def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: None) -> ReclaimResult:
-    """Delete the items of ``search.verified``. Never deletes anything else."""
+def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: None,
+            excludes=()) -> ReclaimResult:
+    """Delete the items of ``search.verified``. Never deletes anything else.
+    The protection list is re-read here, right before deleting."""
     result = ReclaimResult()
     if search is None or search.verified is None:
         raise ReclaimError("only a JOINTLY VERIFIED plan can be reclaimed")
+    guard = Guard(excludes)
     by_root = {str(Path(m["project"])): m for m in manifests}
     groups: dict = {}
     for item in search.verified.plan.items:
@@ -101,13 +112,16 @@ def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: Non
         m = by_root[root_str]
         root = Path(root_str).resolve()
         name = m.get("name", root.name)
+        if guard.status(root) != "clear":
+            result.refused.append((name, "the project is protected or excluded"))
+            continue
         stale = manifest_mod.staleness(m)
         if stale:
             result.refused.append((name, "analysis is stale: " + "; ".join(stale)))
             continue
         by_path = {e["path"]: e for e in m["entries"]}
         entries = [by_path[i.path] for i in items]
-        reason = _preflight(root, entries)
+        reason = _preflight(root, entries, guard)
         if reason:
             result.refused.append((name, reason))
             log(f"reclaim   {name}: refused, {reason}")
@@ -160,7 +174,8 @@ def restore(root: Path, paths: Optional[list] = None,
         rec.setdefault("identity", known.get(rec["path"]))
     result = RestoreResult()
     state = {"cfg": None}
-    before = snapshot(root, skip_top=(CONFIG_DIR,))
+    guard = Guard()
+    before = snapshot(root, skip_top=(CONFIG_DIR,), guard=guard)
 
     def bring_back(rec: dict) -> None:
         if rec.get("recovery"):
@@ -188,6 +203,12 @@ def restore(root: Path, paths: Optional[list] = None,
         retry = []
         for rec in pending:
             target = _target(root, rec["path"])
+            source = (rec.get("recovery") or {}).get("source")
+            if guard.status(target) != "clear" or guard.contains_guarded(target) or (
+                    source and guard.status(root / source) != "clear"):
+                result.failed.append((rec["path"], "protected or excluded: not touched"))
+                keep.append(rec)
+                continue
             if os.path.lexists(target):
                 if _matches(target, rec):
                     result.restored.append(rec["path"])  # already back (e.g. rebuilt with another item)
@@ -216,7 +237,7 @@ def restore(root: Path, paths: Optional[list] = None,
     _write_log(root, keep)
     if state["cfg"] is not None:  # a declared workflow ran in the project: say what else it touched
         restored = set(result.restored)
-        for key in snapshot_diff(before, snapshot(root, skip_top=(CONFIG_DIR,))):
+        for key in snapshot_diff(before, snapshot(root, skip_top=(CONFIG_DIR,), guard=guard)):
             rel = key.replace(os.sep, "/")
             if key in before and not any(rel == p or rel.startswith(p + "/") for p in restored):
                 result.also_changed.append(rel)

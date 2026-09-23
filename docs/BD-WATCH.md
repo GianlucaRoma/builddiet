@@ -72,6 +72,15 @@ note: your declared workflow (builddiet init) also rewrote these existing files:
 
 Level-0 restores and level-1 recipes are proven not to touch other files. A declared workflow is your build, and it does what your build does.
 
+## Re-run with protected paths
+
+The gate was re-run from scratch after protected paths were added. `BUILDDIET_HOME` pointed at a gate-only folder, so the real `~/.builddiet` was never written.
+
+* **Protected:** `builddiet protect D:\builddiet-bdwatch\ML\workspace\models`, deliberately with different letter case.
+* **Excluded for this run:** `--exclude D:\builddiet-bdwatch\corpus\workspace\cache`.
+* **Cycle:** `watch --auto` reclaimed 5 items (4.1 MB). `models/` (reported as "protected ... never read, never touched", 0 B) and `cache/` were left intact.
+* **Restore:** all 5 items came back byte-identical. 55 of 56 files are identical to before; the exception is again `weights.q8`, refreshed by the declared build and reported.
+
 ## What the gate changed in BuildDiet
 
 * **Nondeterministic outputs are no longer deleted by default.** The first run deleted `build-info.json` (a timestamp, PROVEN only in workflow mode), which by nature cannot come back byte-identical. `reclaim` and `watch` now delete only byte-identical items; `reclaim --allow-nondeterministic` opts in.

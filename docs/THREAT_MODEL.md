@@ -16,6 +16,11 @@
 | Deleted data turns out to be needed right away | `restore` brings it back from the logged recovery (copy / archive / git / recipe / workflow) and checks the bytes. |
 | `watch --auto` deletes too much | Only down to `--keep-free`, only within `--max-penalty` of expected rebuild, only byte-identical items. Without `--auto` it always asks. |
 | A dialog is left unanswered or the session is non-interactive | Treated as "no". |
+| A path the user protected gets read or deleted | Global protection list with absolute precedence, checked before reading, again before deleting, and every `watch` cycle. `--include`, `--include-git`, stale plans and `--auto` cannot override it (`tests/test_protect.py`). |
+| The protection is bypassed by another spelling (case, `..`, trailing separator, 8.3 name) | Paths are compared canonically: `realpath` plus `normcase`. |
+| The protection is bypassed through a symlink or junction | Links resolving into a protected area count as protected. No walk, copy or delete ever follows a link (`builddiet/fs.py`). Junctions are covered by tests; symlinks too where the OS allows creating them. |
+| A parent of a protected path is deleted | `delete_verdict` refuses any path that contains a protected path, and analysis splits such folders. |
+| The protection status cannot be determined | Fail closed: treated as protected. An unreadable protection list stops every command. |
 | Path traversal in config or archives (`../x`, `..` members) | `normalize_rel` rejects absolute paths, drive letters and `..`. Archive restores skip members containing `..`. |
 | A discovered command is dangerous (`git push`, `rm -rf`, `curl`, `pip install`, `docker`, ...) | It is refused and listed as "never run" (`recipes.check_safe`), whatever its source. |
 | A discovered command uses an absolute path to the original project, so it would write to the original | Paths to the project are rewritten to `{project}`, which points at the sandbox. Any other absolute path is refused. |

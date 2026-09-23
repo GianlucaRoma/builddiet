@@ -38,7 +38,8 @@ from .cost import rebuild_penalty
 from .model import IN_GIT, INCONCLUSIVE, NOT_REGENERATED, PROVEN, REQUIRED, STALE, UNTESTED
 from .planner import JointCheck
 from .sandbox import Sandbox, default_sandbox_base
-from .scanner import CANDIDATE, EXCLUDED, STATUS_DETAIL, scan
+from .protect import Guard
+from .scanner import CANDIDATE, EXCLUDED, LINK, PROTECTED, STATUS_DETAIL, USER_EXCLUDED, scan
 from .units import format_duration, format_size, shorten
 from .verifier import (
     IDENTICAL,
@@ -189,6 +190,7 @@ def verify_joint(
     sandbox_dir: Optional[Path] = None,
     force: bool = False,
     log: Callable[[str], None] = lambda _msg: None,
+    guard: Optional[Guard] = None,
 ) -> JointCheck:
     """Remove every plan item of one project together and re-check the PROVEN invariants.
 
@@ -201,7 +203,12 @@ def verify_joint(
     """
     root = Path(root).resolve()
     cfg.validate(require_workflow=False)
+    guard = guard if guard is not None else Guard()
     paths = [e["path"] for e in entries]
+    for p in paths:
+        reason = guard.delete_verdict(root / p)
+        if reason:
+            return JointCheck(False, f"refused: {reason}")
 
     def inside_plan(rel: str) -> bool:
         return any(rel == p or rel.startswith(p + "/") or p.startswith(rel + "/") for p in paths)
@@ -229,9 +236,9 @@ def verify_joint(
         return JointCheck(False, "the workflow these items were proven with is no longer configured", fatal=True)
 
     _check_space(total_bytes, sandbox_dir, force)
-    original_before = snapshot(root, skip_top=(CONFIG_DIR,))
+    original_before = snapshot(root, skip_top=(CONFIG_DIR,), guard=guard)
     env = _workflow_env()
-    with Sandbox(root, base=sandbox_dir) as sb:
+    with Sandbox(root, base=sandbox_dir, guard=guard) as sb:
         env["BUILDDIET_SANDBOX"] = str(sb.project)
         log(f"joint     {len(paths)} items of {root.name}: copying {format_size(total_bytes)} ...")
         sb.populate()
@@ -306,7 +313,7 @@ def verify_joint(
                 return JointCheck(False, f"restoring the plan also changed {changed[0]}", identities=identities)
         rebuild = round(rebuild_penalty(elapsed, warm_seconds), 3)
 
-    changed = snapshot_diff(original_before, snapshot(root, skip_top=(CONFIG_DIR,)))
+    changed = snapshot_diff(original_before, snapshot(root, skip_top=(CONFIG_DIR,), guard=guard))
     if changed:
         return JointCheck(
             False,
@@ -330,8 +337,8 @@ def run_command(command: str, cwd: Path, log_path: Path, timeout: float, env: Op
     return res.ok, res.seconds, res.log_tail
 
 
-def _level0(root: Path, targets: list, entries: dict, log: Callable[[str], None]) -> set:
-    recoveries = level0.find_recoverable(root, targets, log)
+def _level0(root: Path, targets: list, entries: dict, log: Callable[[str], None], guard=None) -> set:
+    recoveries = level0.find_recoverable(root, targets, log, guard)
     for path, rec in recoveries.items():
         entry = entries[path]
         entry.verdict = IN_GIT if rec.method == level0.GIT else PROVEN
@@ -501,6 +508,7 @@ def analyze(
     agent_log_dirs: Optional[list] = None,
     confirm: Optional[Callable[[list, list], bool]] = None,
     max_tries: int = 3,
+    guard: Optional[Guard] = None,
 ) -> dict:
     """Analyze ``root``.
 
@@ -509,13 +517,18 @@ def analyze(
     recipes are discovered and, once ``confirm`` approves them, tested with
     the byte-identity invariant (level 1).
     """
+    guard = guard if guard is not None else Guard()
+    state = guard.status(root)  # before anything inside the folder is read
+    if state != "clear":
+        raise AnalysisError(f"{root} is {state if state != 'unknown' else 'of undetermined protection status'}; "
+                            "it is not analyzed")
     root = Path(root).resolve()
     if not root.is_dir():
         raise AnalysisError(f"{root} is not a directory")
     cfg.validate(require_workflow=False)
     workflow = bool(cfg.regenerate or cfg.verify)
     adapters = adapters_mod.detect(root)
-    regions = scan(root, cfg, adapters)
+    regions = scan(root, cfg, adapters, guard)
     total = sum(r.bytes for r in regions)
 
     entries = {
@@ -533,9 +546,9 @@ def analyze(
             )
 
     warnings: list = []
-    original_before = snapshot(root, skip_top=(CONFIG_DIR,))
+    original_before = snapshot(root, skip_top=(CONFIG_DIR,), guard=guard)
     log(f"level 0   checking {len(targets)} candidates for identical copies, archives and git ...")
-    done = _level0(root, targets, entries, log)
+    done = _level0(root, targets, entries, log, guard)
     remaining = [r for r in targets if r.path not in done]
 
     baseline = None
@@ -544,8 +557,8 @@ def analyze(
     mode = "hash-only"
     discovery = None
     if remaining and not workflow and recipes_enabled:
-        excluded = {r.path for r in regions if r.status == EXCLUDED}
-        discovery = recipes.discover(root, [r.path for r in remaining], excluded, agent_log_dirs)
+        excluded = {r.path for r in regions if r.status in (EXCLUDED, PROTECTED, USER_EXCLUDED, LINK)}
+        discovery = recipes.discover(root, [r.path for r in remaining], excluded, agent_log_dirs, guard)
         rejected = [{"command": c, "reason": why} for c, why in discovery.rejected]
         if not discovery.recipes:
             for r in remaining:
@@ -559,7 +572,7 @@ def analyze(
     if remaining and (workflow or discovery is not None):
         _check_space(total, sandbox_dir, force)
         env = _workflow_env()
-        with Sandbox(root, base=sandbox_dir, keep=keep_sandbox) as sb:
+        with Sandbox(root, base=sandbox_dir, keep=keep_sandbox, guard=guard) as sb:
             env["BUILDDIET_SANDBOX"] = str(sb.project)
             log(f"sandbox   {sb.root}")
             log(f"copying   {format_size(total)} ...")
@@ -577,7 +590,7 @@ def analyze(
     for entry in entries.values():
         if entry.verdict in (PROVEN, IN_GIT):
             entry.signature = signature(fingerprint(root / entry.path, "full"))
-    changed = snapshot_diff(original_before, snapshot(root, skip_top=(CONFIG_DIR,)))
+    changed = snapshot_diff(original_before, snapshot(root, skip_top=(CONFIG_DIR,), guard=guard))
     if changed:
         warnings.append(
             f"{len(changed)} files in the ORIGINAL project changed during the analysis "

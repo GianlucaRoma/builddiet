@@ -9,13 +9,20 @@ from . import manifest as manifest_mod
 from .config import Config, load_config
 from .experiment import verify_joint
 from .planner import PlanSearch, collect_items, search_verified, solve
+from .protect import Guard
 
 
-def load_manifests(paths, allow_stale: bool = False) -> tuple:
-    """(fresh manifests, list of 'skipped ...' reasons) for projects at or below ``paths``."""
+def load_manifests(paths, allow_stale: bool = False, guard: Optional[Guard] = None) -> tuple:
+    """(fresh manifests, list of 'skipped ...' reasons) for projects at or below ``paths``.
+    Protected / excluded folders are not entered."""
+    guard = guard if guard is not None else Guard()
     manifests, skipped = [], []
     for path in paths:
-        roots = manifest_mod.find(Path(path))
+        state = guard.status(path)
+        if state != "clear":
+            skipped.append(f"{path}: {state}")
+            continue
+        roots = manifest_mod.find(Path(path), guard=guard)
         if not roots:
             skipped.append(f"{path}: no analysis found")
         for root in roots:
@@ -68,9 +75,11 @@ def verified_plan(
     strict: bool = False,
     verify: bool = True,
     log: Callable[[str], None] = lambda _m: None,
+    guard: Optional[Guard] = None,
 ) -> tuple:
     """(PlanSearch, plan items) for ``target`` bytes across ``manifests``."""
-    items = collect_items(manifests, strict=strict, include_git=include_git)
+    guard = guard if guard is not None else Guard()
+    items = collect_items(manifests, strict=strict, include_git=include_git, guard=guard)
     by_root = {str(Path(m["project"])): m for m in manifests}
 
     def verify_group(root: str, group: list):
@@ -78,7 +87,7 @@ def verified_plan(
         by_path = {e["path"]: e for e in m["entries"]}
         return verify_joint(
             Path(root), project_config(m), [by_path[i.path] for i in group],
-            total_bytes=m["total_bytes"], sandbox_dir=sandbox_dir, force=force, log=log,
+            total_bytes=m["total_bytes"], sandbox_dir=sandbox_dir, force=force, log=log, guard=guard,
         )
 
     if not verify:

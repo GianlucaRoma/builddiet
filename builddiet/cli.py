@@ -23,6 +23,10 @@ from .service import load_manifests, verified_plan
 from .watch import WatchSettings, market, value
 from .watch import run as watch_run
 from .report import render_backup, render_plan, render_report, render_scan, table
+from .protect import Guard, ProtectionError
+from .protect import protect as protect_path
+from .protect import load as load_protected
+from .protect import unprotect as unprotect_path
 from .sandbox import SandboxError
 from .scanner import scan
 from .units import format_duration, format_size, parse_duration, parse_size, shorten
@@ -87,11 +91,19 @@ def _effective_config(args) -> Config:
     return cfg.validate(require_workflow=False)
 
 
+def _guard(args) -> Guard:
+    return Guard(getattr(args, "exclude", None) or ())
+
+
 def cmd_analyze(args) -> int:
+    guard = _guard(args)
+    state = guard.status(args.path)
+    if state != "clear":  # before anything inside it is read, even the config
+        raise ConfigError(f"{Path(args.path).resolve()} is {state}; it is not analyzed")
     root = Path(args.path).resolve()
     cfg = _effective_config(args)
     if args.dry_run:
-        regions = scan(root, cfg)
+        regions = scan(root, cfg, guard=guard)
         rows = [[r.display, format_size(r.bytes), r.status, r.known or ""]
                 for r in sorted(regions, key=lambda r: -r.bytes)]
         print(table(rows, ["path", "size", "status", "known"], right=(1,)))
@@ -113,6 +125,7 @@ def cmd_analyze(args) -> int:
         agent_log_dirs=agent_dirs,
         confirm=lambda found, rejected: _confirm_recipes(found, rejected, args.yes),
         max_tries=args.max_tries,
+        guard=guard,
     )
     if not args.no_save:
         _log(f"saved     {manifest_mod.save(root, manifest)}")
@@ -169,12 +182,13 @@ def cmd_backup_plan(args) -> int:
 
 
 def _plan(args, target: int):
-    manifests, skipped = load_manifests(args.paths, allow_stale=args.allow_stale)
+    guard = _guard(args)
+    manifests, skipped = load_manifests(args.paths, allow_stale=args.allow_stale, guard=guard)
     search, items = verified_plan(
         manifests, target,
         sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
         force=args.force, max_attempts=args.max_attempts, include_git=args.include_git,
-        strict=args.strict, verify=not getattr(args, "no_verify", False), log=_log,
+        strict=args.strict, verify=not getattr(args, "no_verify", False), log=_log, guard=guard,
     )
     return manifests, skipped, search, items
 
@@ -218,7 +232,7 @@ def cmd_reclaim(args) -> int:
         if answer != "reclaim":
             print("Nothing deleted.")
             return 5
-    done = reclaim_mod.reclaim(search, manifests, _log)
+    done = reclaim_mod.reclaim(search, manifests, _log, excludes=args.exclude or ())
     print(f"\nFreed {format_size(done.freed)} ({len(done.deleted)} items).")
     for project, reason in done.refused:
         print(f"  ! {project}: nothing deleted, {reason}")
@@ -250,8 +264,9 @@ def cmd_restore(args) -> int:
 
 
 def cmd_market(args) -> int:
-    manifests, skipped = load_manifests([args.path], allow_stale=args.allow_stale)
-    items = market(manifests, include_git=args.include_git)
+    guard = _guard(args)
+    manifests, skipped = load_manifests([args.path], allow_stale=args.allow_stale, guard=guard)
+    items = market(manifests, include_git=args.include_git, guard=guard)
     for reason in skipped:
         _log(f"! skipped {reason}")
     if not items:
@@ -274,6 +289,37 @@ def cmd_market(args) -> int:
     return 0
 
 
+def cmd_protect(args) -> int:
+    for path in args.paths:
+        record = protect_path(path)
+        note = "" if record.get("exists", True) else "  (does not exist yet; protected by path)"
+        print(f"protected   {record['canonical']}{note}")
+    return 0
+
+
+def cmd_unprotect(args) -> int:
+    missing = 0
+    for path in args.paths:
+        removed = unprotect_path(path)
+        if removed:
+            for r in removed:
+                print(f"unprotected {r['canonical']}")
+        else:
+            print(f"not protected: {path}", file=sys.stderr)
+            missing += 1
+    return 1 if missing else 0
+
+
+def cmd_protected(args) -> int:
+    records = load_protected()
+    if not records:
+        print("No protected paths.  Add one with:  builddiet protect <path>")
+        return 0
+    for r in records:
+        print(f"  {r['canonical']}    (added {r.get('added', '?')})")
+    return 0
+
+
 def cmd_watch(args) -> int:
     settings = WatchSettings(
         prepare_below=args.prepare_below, reclaim_below=args.reclaim_below,
@@ -284,7 +330,9 @@ def cmd_watch(args) -> int:
         min_size=parse_size(args.min_size),
         sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
         dialog=not args.no_dialog, interval=parse_duration(args.interval),
+        excludes=tuple(args.exclude or ()),
     )
+    _guard(args)  # fail now (not in the loop) if the protection list is unreadable
     if not (settings.aggressive_below < settings.reclaim_below < settings.prepare_below <= settings.keep_free):
         raise ConfigError("thresholds must satisfy aggressive < reclaim < prepare <= keep-free")
     base = Path(args.path).resolve()
@@ -299,8 +347,11 @@ def cmd_watch(args) -> int:
 
 
 def cmd_scan(args) -> int:
+    guard = _guard(args)
+    if guard.status(args.path) != "clear":
+        raise ConfigError(f"{Path(args.path).resolve()} is protected or excluded")
     base = Path(args.path).resolve()
-    roots = manifest_mod.find(base)
+    roots = manifest_mod.find(base, guard=guard)
     loaded = []
     for root in roots:
         m = manifest_mod.load(root)
@@ -309,7 +360,8 @@ def cmd_scan(args) -> int:
     unanalyzed = []
     try:
         for entry in sorted(os.scandir(base), key=lambda e: e.name):
-            if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
+            if not entry.is_dir(follow_symlinks=False) or entry.name.startswith(".") \
+                    or guard.status(entry.path) != "clear":
                 continue
             child = Path(entry.path).resolve()
             if not any(a == child or child in a.parents or a in child.parents for a in analyzed):
@@ -368,6 +420,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="only list candidates, run nothing")
     p.add_argument("--no-save", action="store_true", help="do not write .builddiet/manifest.json")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("report", help="show the last analysis")
@@ -389,6 +443,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--sandbox-dir", help="where to create verification sandboxes")
     p.add_argument("--force", action="store_true", help="skip the free-space check")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("reclaim", help="delete a jointly verified plan (asks first)")
@@ -402,6 +458,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-attempts", type=int, default=5)
     p.add_argument("--sandbox-dir", help="where to create verification sandboxes")
     p.add_argument("--force", action="store_true", help="skip the free-space check")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_reclaim)
 
     p = sub.add_parser("restore", help="bring back what `reclaim` deleted")
@@ -414,6 +472,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path", nargs="?", default=".")
     p.add_argument("--include-git", action="store_true")
     p.add_argument("--allow-stale", action="store_true")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_market)
 
     p = sub.add_parser("watch", help="watch the disk; prepare, offer or perform reclaims")
@@ -433,10 +493,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--min-size", default="100MB", help="smallest candidate (100MB)")
     p.add_argument("--sandbox-dir", help="sandboxes (default: the local drive with most free space)")
     p.add_argument("--no-dialog", action="store_true", help="never show a desktop dialog")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_watch)
+
+    p = sub.add_parser("protect", help="never read, analyze, plan or delete these paths (persistent)")
+    p.add_argument("paths", nargs="+")
+    p.set_defaults(func=cmd_protect)
+
+    p = sub.add_parser("unprotect", help="remove a protection")
+    p.add_argument("paths", nargs="+")
+    p.set_defaults(func=cmd_unprotect)
+
+    p = sub.add_parser("protected", help="list protected paths")
+    p.set_defaults(func=cmd_protected)
 
     p = sub.add_parser("scan", help="summarize every analyzed project under a folder")
     p.add_argument("path", nargs="?", default=".")
+    p.add_argument("--exclude", action="append", metavar="PATH",
+                   help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_scan)
 
     p = sub.add_parser("backup-plan", help="which bytes are irreproducible")
@@ -456,7 +531,7 @@ def main(argv=None) -> int:
     try:
         return args.func(args)
     except (ConfigError, AnalysisError, SandboxError, manifest_mod.ManifestError,
-            reclaim_mod.ReclaimError, ValueError) as exc:
+            reclaim_mod.ReclaimError, ProtectionError, ValueError) as exc:
         print(f"builddiet: error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

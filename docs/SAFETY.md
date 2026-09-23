@@ -26,6 +26,13 @@ BuildDiet exists because people are afraid to delete the wrong thing. It must ne
     * `reclaim` asks you to type `reclaim`.
     * `watch` asks through a dialog or the terminal, or with `--auto` acts only within `--keep-free` and `--max-penalty`.
     * An unanswered dialog is a "no".
+15. **Protected paths have absolute precedence.**
+    * `builddiet protect` stores canonical paths globally (`~/.builddiet/protected.json`). Canonical means resolved through symlinks, junctions, `..` and 8.3 names, and case-normalised on Windows.
+    * Every command checks a path before reading anything inside it: `analyze`, `plan`, `market`, `scan`, `watch` (re-read every cycle), `reclaim` (re-read right before deleting) and `restore`.
+    * A folder that contains a protected path is split during analysis and never deleted as a whole.
+    * Unresolvable paths count as protected. An unreadable protection list stops BuildDiet.
+    * `--exclude` adds temporary exclusions and can never remove a protection.
+16. **Links are never followed.** Every walk, copy and deletion goes through `builddiet/fs.py`, which treats symlinks, junctions and other reparse points as opaque entries. On Windows with Python 3.10, `os.walk` and `shutil.copytree` do follow junctions (verified), which would read and copy whatever a junction points to.
 
 ## What BuildDiet can't protect you from
 

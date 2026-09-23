@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from . import fs
 from .config import CONFIG_DIR
 
 MARKERS = (
@@ -26,12 +27,15 @@ def is_workspace(path: Path) -> bool:
     return any(n in MARKERS for n in names) or any(n.endswith(MARKER_SUFFIXES) for n in names)
 
 
-def discover(root: Path, max_depth: int = 3) -> list:
-    """Project roots at or below ``root``; nested projects are not listed twice."""
+def discover(root: Path, max_depth: int = 3, guard=None) -> list:
+    """Project roots at or below ``root``; nested projects are not listed twice.
+    Protected / excluded folders are neither listed nor entered; links are not followed."""
     root = Path(root).resolve()
     found = []
 
     def walk(path: Path, depth: int) -> None:
+        if guard is not None and guard.status(path) != "clear":
+            return
         if is_workspace(path):
             found.append(path)
             return
@@ -40,7 +44,8 @@ def discover(root: Path, max_depth: int = 3) -> list:
         try:
             children = sorted(
                 e.path for e in os.scandir(path)
-                if e.is_dir(follow_symlinks=False) and e.name not in SKIP and not e.name.startswith(".")
+                if not fs.is_link(e) and e.is_dir(follow_symlinks=False)
+                and e.name not in SKIP and not e.name.startswith(".")
             )
         except OSError:
             return

@@ -45,6 +45,23 @@ $ builddiet market D:/Projects
 
 Manual equivalents: `builddiet plan DIR --free 20GB` shows the plan, and `builddiet reclaim DIR --free 20GB` deletes it after you type `reclaim`.
 
+## Protected paths
+
+```bash
+builddiet protect D:/Projects/important-project   # persistent, global
+builddiet protected                               # list
+builddiet unprotect D:/Projects/important-project
+builddiet watch D:/Projects --exclude D:/Projects/tmp-experiment   # this run only
+```
+
+A protected path is never read, sized, copied into a sandbox, analyzed, planned, deleted or restored into, by any command, including `watch --auto`. The check happens before anything inside the path is looked at.
+
+* **Precedence.** Protection overrides config `include`, `--include-git`, earlier analyses and plans that were already verified: `reclaim` re-reads the list right before deleting.
+* **No bypass by spelling.** Paths are compared after resolving symlinks, junctions, `..` and letter case (Windows).
+* **No bypass through links.** A link that leads into a protected area is never followed.
+* **Parent/child both count.** A folder that *contains* a protected path is never deleted as a whole.
+* **Fail closed.** If a path cannot be resolved, it is treated as protected. If the protection list cannot be read, BuildDiet refuses to run.
+
 ## Why
 
 Workspaces fill up with build trees, datasets, model files, exports, caches and copies of all of those. Deleting them by hand is scary for two reasons: you don't know what is still needed, and you don't know how long it will take to get it back.
@@ -129,6 +146,7 @@ JOINTLY VERIFIED PLAN
 * **Sandbox.** The project is copied, and every destructive step is path-checked to stay inside the copy. Absolute paths to the project in discovered commands are rewritten to point at the sandbox.
 * **You approve the commands.** Discovered recipes are listed, and nothing runs until you say yes. Dangerous categories are refused outright.
 * **Side effects disqualify.** A recipe that changes any other existing file proves nothing. From the outside, refreshing a stale output and overwriting your data look the same. The only exception is a short, explicit list of volatile files (`*.log`, `logs/`, `__pycache__/`, `*.pyc`, tool caches).
+* **Protected paths win over everything** (see above). Symlinks and junctions are never followed by any walk, copy or deletion.
 * **Agent logs are opt-in and local.** `--agent-logs` reads `~/.codex/sessions` and `~/.claude/projects` on your machine, keeps only commands whose working directory is inside the analyzed project, and sends nothing anywhere.
 * **The original is watched.** If anything in it changes during an analysis, the report says so.
 * **Restoring through a declared workflow runs your build** in the project. If the build also rewrites other files (e.g. refreshes a stale output), `restore` lists them. Level-0 restores (copy/extract/git) and level-1 recipes are proven to touch nothing else.

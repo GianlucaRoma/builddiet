@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import fs
 from .config import CONFIG_DIR, Config
 from .recipes import Recipe, project_python, render
 from .sandbox import Sandbox, force_remove
@@ -52,7 +53,7 @@ class State:
 def snapshot(project: Path) -> State:
     files, dirs = {}, set()
     base = str(project)
-    for dirpath, dirnames, filenames in os.walk(base):
+    for dirpath, dirnames, filenames in fs.walk(base):
         rel_dir = os.path.relpath(dirpath, base).replace(os.sep, "/")
         rel_dir = "" if rel_dir == "." else rel_dir
         if not rel_dir:

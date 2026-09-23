@@ -28,6 +28,7 @@ from .agentlogs import default_log_dirs
 from .config import Config, load_config
 from .experiment import AnalysisError, analyze
 from .planner import collect_items
+from .protect import Guard
 from .reclaim import reclaim
 from .service import affordable_target, load_manifests, verified_plan
 from .units import format_duration, format_size
@@ -51,6 +52,7 @@ class WatchSettings:
     dialog: bool = True
     max_attempts: int = 5
     interval: float = 600.0
+    excludes: tuple = ()  # temporary exclusions (--exclude); protections always apply
 
 
 @dataclass
@@ -83,9 +85,9 @@ def needed_bytes(status: DiskStatus, s: WatchSettings) -> int:
     return max(0, int(status.total * s.keep_free / 100.0) - status.free)
 
 
-def refresh_market(root: Path, s: WatchSettings, log: Callable[[str], None]) -> list:
+def refresh_market(root: Path, s: WatchSettings, log: Callable[[str], None], guard: Guard) -> list:
     """Analyze workspaces with no analysis or a stale one; return the fresh manifests."""
-    for ws in workspaces.discover(root):
+    for ws in workspaces.discover(root, guard=guard):
         try:
             current = manifest_mod.load(ws)
             if not manifest_mod.staleness(current):
@@ -100,12 +102,13 @@ def refresh_market(root: Path, s: WatchSettings, log: Callable[[str], None]) -> 
                 recipes_enabled=s.allow_recipes,
                 confirm=lambda *_: s.allow_recipes,
                 agent_log_dirs=default_log_dirs() if s.agent_logs else None,
+                guard=guard,
             )
         except (AnalysisError, OSError, ValueError) as exc:
             log(f"market    skipped {ws.name}: {exc}")
             continue
         manifest_mod.save(ws, m)
-    manifests, _skipped = load_manifests([root])
+    manifests, _skipped = load_manifests([root], guard=guard)
     return manifests
 
 
@@ -122,9 +125,9 @@ def value(item) -> str:
     return VALUE_HIGH
 
 
-def market(manifests: list, include_git: bool = False) -> list:
+def market(manifests: list, include_git: bool = False, guard=None) -> list:
     """What `watch` could reclaim across projects (byte-identical items), cheapest first."""
-    return sorted(collect_items(manifests, strict=True, include_git=include_git),
+    return sorted(collect_items(manifests, strict=True, include_git=include_git, guard=guard),
                   key=lambda i: (i.cost / max(i.bytes, 1), -i.bytes))
 
 
@@ -144,19 +147,23 @@ class CycleResult:
 def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
           ask: Callable = notify.ask, log: Callable[[str], None] = print,
           interactive: Optional[bool] = None) -> CycleResult:
+    guard = Guard(s.excludes)  # re-read every cycle: a protection added meanwhile applies at once
+    if guard.status(root) != "clear":
+        log(f"refused   {root} is protected or excluded; watching nothing")
+        return CycleResult(OK, 100.0, message="watched folder is protected")
     root = Path(root).resolve()
     status = disk_status(root, usage)
     lvl = level(status, s)
     log(f"disk      {status.free_pct:.1f}% free ({format_size(status.free)} of "
         f"{format_size(status.total)}) -> {lvl}")
-    manifests = refresh_market(root, s, log)
+    manifests = refresh_market(root, s, log, guard)
     result = CycleResult(lvl, status.free_pct)
     if lvl == OK:
         return result
 
     result.needed = needed_bytes(status, s)
     cap = s.aggressive_max_penalty if lvl == AGGRESSIVE else s.max_penalty
-    items = collect_items(manifests, strict=True)  # watch only deletes what comes back byte-for-byte
+    items = collect_items(manifests, strict=True, guard=guard)  # only byte-identical, never protected
     target = affordable_target(items, result.needed, cap)
     if target <= 0:
         result.message = (f"Disk space is low ({status.free_pct:.0f}% free), but nothing proven can be "
@@ -164,7 +171,7 @@ def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
         log(result.message)
         return result
     search, _ = verified_plan(manifests, target, sandbox_dir=s.sandbox_dir,
-                              max_attempts=s.max_attempts, strict=True, log=log)
+                              max_attempts=s.max_attempts, strict=True, log=log, guard=guard)
     if search.verified is None:
         result.message = f"No jointly verified plan: {search.stopped}."
         log(result.message)
@@ -209,7 +216,7 @@ def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
     if not go:
         log("reclaim   not approved; nothing deleted")
         return result
-    done = reclaim(search, manifests, log)
+    done = reclaim(search, manifests, log, excludes=s.excludes)
     result.reclaimed = done.freed
     result.refused = done.refused
     log(f"reclaim   freed {format_size(done.freed)}"

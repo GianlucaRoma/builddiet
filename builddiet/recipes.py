@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from . import fs
 from .scanner import METADATA_DIRS
 
 ROOT_TOKEN = "{project}"
@@ -175,7 +176,7 @@ def _latest_mtime(path: Path) -> float:
     if path.is_file():
         return path.stat().st_mtime
     latest = 0.0
-    for dirpath, _dirs, files in os.walk(path):
+    for dirpath, _dirs, files in fs.walk(path):
         for f in files:
             try:
                 latest = max(latest, os.stat(os.path.join(dirpath, f)).st_mtime)
@@ -185,7 +186,7 @@ def _latest_mtime(path: Path) -> float:
 
 
 def _walk_text_files(root: Path, suffixes: tuple, skip: set):
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in fs.walk(root):
         rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
         rel_dir = "" if rel_dir == "." else rel_dir
         dirnames[:] = [
@@ -194,7 +195,7 @@ def _walk_text_files(root: Path, suffixes: tuple, skip: set):
             and f"{rel_dir}/{d}".lstrip("/") not in skip
         ]
         for name in filenames:
-            if name.lower().endswith(suffixes):
+            if name.lower().endswith(suffixes) and f"{rel_dir}/{name}".lstrip("/") not in skip:
                 full = os.path.join(dirpath, name)
                 try:
                     if os.path.getsize(full) <= _MAX_SCRIPT_BYTES:
@@ -221,9 +222,9 @@ def _from_scripts(root: Path, candidates: list, excluded: set) -> list:
     return recipes
 
 
-def _from_makefile(root: Path, candidates: list) -> list:
+def _from_makefile(root: Path, candidates: list, skip: set = frozenset()) -> list:
     makefile = root / "Makefile"
-    if not makefile.is_file():
+    if "Makefile" in skip or not makefile.is_file():
         return []
     text = makefile.read_text(encoding="utf-8", errors="replace")
     targets = {m.group(1) for m in re.finditer(r"^([A-Za-z0-9_./-]+)\s*:(?!=)", text, re.MULTILINE)}
@@ -237,11 +238,11 @@ def _from_makefile(root: Path, candidates: list) -> list:
     return recipes
 
 
-def _from_ecosystem(root: Path, candidates: list) -> list:
+def _from_ecosystem(root: Path, candidates: list, skip: set = frozenset()) -> list:
     recipes = []
     names = {c: c.rsplit("/", 1)[-1] for c in candidates}
     package = root / "package.json"
-    if package.is_file():
+    if "package.json" not in skip and package.is_file():
         for c, n in names.items():
             if n == "node_modules" and c == "node_modules":
                 if (root / "package-lock.json").exists():
@@ -300,14 +301,14 @@ def _commands_in_workflow(text: str) -> list:
     return out
 
 
-def _from_docs(root: Path, candidates: list) -> list:
+def _from_docs(root: Path, candidates: list, skip: set = frozenset()) -> list:
     commands = []
     for name in DOC_FILES:
         path = root / name
-        if path.is_file():
+        if name not in skip and not any(name.startswith(s + "/") for s in skip) and path.is_file():
             commands += [(c, name) for c in _commands_in_markdown(path.read_text(encoding="utf-8", errors="replace"))]
     workflows = root / ".github" / "workflows"
-    if workflows.is_dir():
+    if ".github" not in skip and workflows.is_dir() and not fs.is_link(workflows):
         for wf in sorted(workflows.glob("*.y*ml")):
             commands += [(c, f".github/workflows/{wf.name}")
                          for c in _commands_in_workflow(wf.read_text(encoding="utf-8", errors="replace"))]
@@ -321,10 +322,10 @@ def _from_docs(root: Path, candidates: list) -> list:
     return recipes
 
 
-def _from_agent_logs(root: Path, candidates: list, log_dirs: Optional[list]) -> list:
+def _from_agent_logs(root: Path, candidates: list, log_dirs: Optional[list], guard=None) -> list:
     from . import agentlogs
 
-    logged = agentlogs.commands_for(root, log_dirs)
+    logged = agentlogs.commands_for(root, log_dirs, guard)
     if not logged:
         return []
     mtimes = {c: _latest_mtime(root / c) for c in candidates}
@@ -371,16 +372,17 @@ class Discovery:
 
 
 def discover(root: Path, candidates: list, excluded: Optional[set] = None,
-             agent_log_dirs: Optional[list] = None) -> Discovery:
+             agent_log_dirs: Optional[list] = None, guard=None) -> Discovery:
     """Collect recipe hypotheses for ``candidates`` (project-relative paths)."""
     root = Path(root).resolve()
     found = []
     if agent_log_dirs is not None:
-        found += _from_agent_logs(root, candidates, agent_log_dirs)
-    found += _from_makefile(root, candidates)
-    found += _from_scripts(root, candidates, excluded or set())
-    found += _from_ecosystem(root, candidates)
-    found += _from_docs(root, candidates)
+        found += _from_agent_logs(root, candidates, agent_log_dirs, guard)
+    skip = set(excluded or ())
+    found += _from_makefile(root, candidates, skip)
+    found += _from_scripts(root, candidates, skip)
+    found += _from_ecosystem(root, candidates, skip)
+    found += _from_docs(root, candidates, skip)
 
     merged: dict = {}
     rejected = []

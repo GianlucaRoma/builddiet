@@ -6,6 +6,8 @@ import hashlib
 import os
 import stat
 from dataclasses import dataclass, field
+
+from . import fs
 from pathlib import Path
 
 IDENTICAL = "identical"  # every file recreated with the same content
@@ -44,19 +46,21 @@ def fingerprint(path: Path, mode: str = "full") -> Fingerprint:
 
     def record(full: str, rel: str) -> None:
         st = os.lstat(full)
-        if stat.S_ISLNK(st.st_mode):
-            fp.entries[rel] = (0, "link:" + os.readlink(full))
+        if fs.is_link(full):
+            try:
+                fp.entries[rel] = (0, "link:" + os.readlink(full))
+            except OSError:
+                fp.entries[rel] = (0, "link:?")
         elif stat.S_ISREG(st.st_mode):
             digest = _hash_file(full) if mode == "full" else None
             fp.entries[rel] = (st.st_size, digest)
             fp.total_bytes += st.st_size
 
-    if not os.path.isdir(base) or os.path.islink(base):
+    if not os.path.isdir(base) or fs.is_link(base):
         record(base, ".")
         return fp
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames.sort()
-        for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
+    for dirpath, dirnames, filenames in fs.walk(base):
+        for name in filenames:
             full = os.path.join(dirpath, name)
             rel = os.path.relpath(full, base).replace(os.sep, "/")
             try:
@@ -112,13 +116,17 @@ def split_differences(original: Fingerprint, first: Fingerprint, second: Fingerp
     return stale, nondeterministic
 
 
-def snapshot(root: Path, skip_top=()) -> dict:
-    """Cheap metadata snapshot (size, mtime) used to detect writes to the original."""
+def snapshot(root: Path, skip_top=(), guard=None) -> dict:
+    """Cheap metadata snapshot (size, mtime) used to detect writes to the original.
+    Protected / excluded areas (``guard``) are not listed."""
     out = {}
     base = str(root)
-    for dirpath, dirnames, filenames in os.walk(base):
+    for dirpath, dirnames, filenames in fs.walk(base):
         if dirpath == base:
             dirnames[:] = [d for d in dirnames if d not in skip_top]
+        if guard is not None:
+            dirnames[:] = [d for d in dirnames if guard.status(os.path.join(dirpath, d)) == "clear"]
+            filenames = [f for f in filenames if guard.status(os.path.join(dirpath, f)) == "clear"]
         for name in filenames:
             full = os.path.join(dirpath, name)
             try:

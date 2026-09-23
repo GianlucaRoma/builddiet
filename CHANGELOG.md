@@ -13,6 +13,8 @@ First public version.
 * **`watch DIR`**: finds the projects under a folder and keeps a market of proofs. It prepares and jointly verifies a plan below 15% free, asks (desktop dialog / terminal) below 10%, and allows a bigger rebuild budget below 5%. `--auto` reclaims within `--keep-free` / `--max-penalty`.
 * **`reclaim`** deletes a jointly verified plan: byte-identical items only by default, each re-hashed before deletion and logged. **`restore`** brings items back and checks the bytes.
 * **`market DIR`**: every provably reclaimable item across projects with a LOW/MEDIUM/HIGH value.
+* **Protected paths**: `protect` / `unprotect` / `protected` (persistent, global) and `--exclude` (per run). Protection has absolute precedence in analyze, plan, market, scan, reclaim, restore and `watch --auto`. It resists case / `..` / 8.3 spelling differences and symlinks / junctions, and fails closed.
+* No walk, copy or deletion follows symlinks or junctions (`builddiet/fs.py`).
 * Sandboxes default to the local drive with the most free space (`$BUILDDIET_SANDBOX_DIR` to pin it).
 * `report`, `backup-plan`, `scan` across projects.
 * Release gates: BD-ZERO (zero-configuration), BD-REAL (declared workflow), BD-WATCH (automatic mode on a real near-full drive), BD-PRIOR (prior-art audit).
