@@ -123,8 +123,8 @@ def value(item) -> str:
 
 
 def market(manifests: list, include_git: bool = False) -> list:
-    """Plan items across projects, cheapest to give up first."""
-    return sorted(collect_items(manifests, include_git=include_git),
+    """What `watch` could reclaim across projects (byte-identical items), cheapest first."""
+    return sorted(collect_items(manifests, strict=True, include_git=include_git),
                   key=lambda i: (i.cost / max(i.bytes, 1), -i.bytes))
 
 

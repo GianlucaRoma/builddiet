@@ -102,3 +102,33 @@ If the check fails, each failing item is excluded in turn and the knapsack is so
 * **`hash = "meta"`** compares sizes only (level 2 only); level 0 and level 1 always hash.
 * **Full copies.** Each analysis, and each joint check that runs anything, copies the whole project.
 * **Timing.** Costs come from a single measured run.
+
+## Automatic mode (`watch`) and deletion (`reclaim`)
+
+`watch DIR` runs cycles (default every 10 minutes):
+
+1. **Discover** the projects under `DIR`: folders with `.git`, `.builddiet`, `package.json`, `pyproject.toml`, `Cargo.toml`, `CMakeLists.txt`, `Makefile`, `go.mod`, `*.sln`, `*.uproject`, ... Nested projects are not listed twice.
+2. **Refresh the market.** Analyze projects with no analysis or a stale one. Sandboxes go to the local drive with the most free space. Discovered recipes run unattended only with `--allow-recipes`; otherwise the analysis uses hash proofs only.
+3. **Measure free space** on the watched drive and pick a level:
+
+| Level | Condition (defaults) | Budget |
+|---|---|---|
+| ok | ≥ 15% free | - |
+| prepare | < 15% | `--max-penalty` (5m) |
+| reclaim | < 10% | `--max-penalty` |
+| aggressive | < 5% | `--aggressive-max-penalty` (1h) |
+
+4. **Plan and verify.** The target is the space needed to get back to `--keep-free` (20%). If the cheapest plan for it exceeds the budget, the target shrinks to what fits the budget. The plan is jointly verified, and only byte-identical items are considered.
+5. **Act.**
+   * `prepare` only reports.
+   * `reclaim` and `aggressive` ask, via a desktop dialog (`--no-dialog` to skip it) or the terminal. `--auto` acts without asking.
+   * An unanswered question is a "no".
+
+`reclaim` then, per project:
+
+* refuses if the analysis is stale;
+* re-hashes every item and requires the signature recorded when it was proven;
+* re-checks level-0 sources;
+* deletes, and logs each deletion before the next one.
+
+`restore` brings items back in dependency order (copies, archives and git first, then recipes, then the workflow), in two passes. It then checks the bytes and reports any other file a declared workflow rewrote.
