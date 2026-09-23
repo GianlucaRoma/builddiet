@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Point it at a folder: it proves by experiment what can be brought back byte-for-byte, what that costs, and plans the cheapest verified way to reclaim disk space."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 keywords = ["disk-space", "build", "cache", "eviction", "developer-tools"]
 classifiers = [
     "Environment :: Console",
