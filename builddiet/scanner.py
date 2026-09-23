@@ -37,7 +37,7 @@ STATUS_DETAIL = {
 @dataclass
 class Region:
     path: str
-    kind: str  # "dir" or "files"
+    kind: str  # "dir", "file", or "files" (a group of loose files)
     bytes: int
     files: int
     status: str
@@ -108,11 +108,20 @@ def scan(root: Path, cfg: Config, adapters=None) -> list:
             rel = f"{reldir}/{entry.name}" if reldir else entry.name
             try:
                 is_dir = entry.is_dir(follow_symlinks=False)
-                if not is_dir:
-                    loose_bytes += entry.stat(follow_symlinks=False).st_size
-                    loose_files += 1
-                    continue
+                size = 0 if is_dir else entry.stat(follow_symlinks=False).st_size
             except OSError:
+                continue
+            if not is_dir:
+                # Files are candidates when named in `include`, or in auto mode
+                # when they are at least min_size. The rest is grouped.
+                if excluded(rel):
+                    regions.append(Region(rel, "file", size, 1, EXCLUDED))
+                elif rel in includes or (cfg.auto and size >= cfg.min_size):
+                    status = CANDIDATE if size >= cfg.min_size else SMALL
+                    regions.append(Region(rel, "file", size, 1, status))
+                else:
+                    loose_bytes += size
+                    loose_files += 1
                 continue
             if not reldir and entry.name in METADATA_DIRS:
                 add_dir(rel, METADATA)

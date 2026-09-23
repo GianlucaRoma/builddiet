@@ -12,9 +12,9 @@ from . import __version__
 from . import adapters as adapters_mod
 from . import manifest as manifest_mod
 from .config import Config, ConfigError, config_path, load_config, write_config
-from .experiment import AnalysisError, analyze
-from .model import BUCKET_REGENERABLE, bucket
-from .planner import collect_items, size_first, solve
+from .experiment import AnalysisError, analyze, verify_joint
+from .model import BUCKET_REGENERABLE, bucket, display
+from .planner import PlanSearch, collect_items, search_verified, size_first, solve
 from .report import render_backup, render_plan, render_report, render_scan, table
 from .sandbox import SandboxError
 from .scanner import scan
@@ -89,7 +89,7 @@ def cmd_analyze(args) -> int:
                 for r in sorted(regions, key=lambda r: -r.bytes)]
         print(table(rows, ["path", "size", "status", "known"], right=(1,)))
         n = sum(1 for r in regions if r.status == "candidate")
-        print(f"\n{n} directories would be experimented on. Nothing was run.")
+        print(f"\n{n} candidates would be experimented on. Nothing was run.")
         return 0
     manifest = analyze(
         root,
@@ -124,7 +124,7 @@ def cmd_backup_plan(args) -> int:
     if args.excludes:
         for e in m["entries"]:
             if bucket(e) == BUCKET_REGENERABLE:
-                print(e["path"] + "/")
+                print(display(e))
         return 0
     print(render_backup(m))
     return 0
@@ -145,13 +145,39 @@ def cmd_plan(args) -> int:
                 continue
             manifests.append(m)
     items = collect_items(manifests, strict=args.strict)
-    plan = solve(items, target)
+    by_root = {str(Path(m["project"])): m for m in manifests}
+
+    def verify_group(root: str, group: list):
+        m = by_root[root]
+        cfg = load_config(Path(root)) or Config(
+            regenerate=m["commands"].get("regenerate"),
+            verify=m["commands"].get("verify"),
+            hash_mode=m.get("hash_mode", "full"),
+        )
+        identities = {e["path"]: e.get("identity") for e in m["entries"]}
+        return verify_joint(
+            Path(root), cfg, [i.path for i in group], identities,
+            total_bytes=m["total_bytes"],
+            sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
+            force=args.force,
+            log=_log,
+        )
+
+    if args.no_verify:
+        search = PlanSearch(target, solve(items, target))
+    else:
+        search = search_verified(items, target, verify_group, max_attempts=args.max_attempts)
     if args.json:
-        print(json.dumps(plan.to_dict(), indent=2))
+        print(json.dumps(search.to_dict(), indent=2))
     else:
         multi = len({i.root for i in items}) > 1
-        print(render_plan(plan, size_first(items, target), skipped, multi))
-    return 0 if plan.feasible else 3
+        print(render_plan(search, size_first(items, target), skipped, multi,
+                          verified_requested=not args.no_verify))
+    if not search.first.feasible:
+        return 3
+    if args.no_verify:
+        return 0
+    return 0 if search.verified else 4
 
 
 def cmd_scan(args) -> int:
@@ -221,11 +247,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_report)
 
-    p = sub.add_parser("plan", help="cheapest proven way to free SIZE")
+    p = sub.add_parser("plan", help="cheapest jointly verified way to free SIZE")
     p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
     p.add_argument("--free", required=True, help="space to reclaim, e.g. 20GB")
     p.add_argument("--strict", action="store_true", help="only byte-identical regenerations")
     p.add_argument("--allow-stale", action="store_true", help="use analyses whose environment changed")
+    p.add_argument("--no-verify", action="store_true",
+                   help="show the candidate plan without the joint sandbox verification")
+    p.add_argument("--max-attempts", type=int, default=5,
+                   help="candidate plans to verify before giving up (default 5)")
+    p.add_argument("--sandbox-dir", help="where to create verification sandboxes")
+    p.add_argument("--force", action="store_true", help="skip the free-space check")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_plan)
 

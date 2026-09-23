@@ -1,14 +1,20 @@
 """The experiment loop.
 
     copy project -> sandbox
+    fingerprint every candidate          (= the user's original bytes)
     baseline:   regenerate + verify (cold), then again (warm)  -> must PASS
-    for each candidate directory:
-        fingerprint it
+    for each candidate directory or file:
         move it aside            (inside the sandbox)
         regenerate + verify      (timed)
-        fingerprint what came back, compare
-        restore the original bytes
+        fingerprint what came back, compare with the ORIGINAL bytes
+        restore
+        if it came back different: repeat once more, to tell a stale/corrupt
+        original (same bytes both times) from nondeterministic output
     -> one verdict per candidate
+
+Fingerprints are taken before the baseline on purpose: the baseline may
+refresh a stale file, and the claim BuildDiet makes is about the bytes the
+user has on disk, not about the refreshed ones.
 """
 
 from __future__ import annotations
@@ -27,17 +33,21 @@ from . import adapters as adapters_mod
 from . import manifest as manifest_mod
 from .config import CONFIG_DIR, Config
 from .cost import rebuild_penalty
-from .model import INCONCLUSIVE, NOT_REGENERATED, PROVEN, REQUIRED, UNTESTED
+from .model import INCONCLUSIVE, NOT_REGENERATED, PROVEN, REQUIRED, STALE, UNTESTED
+from .planner import JointCheck
 from .sandbox import Sandbox
 from .scanner import CANDIDATE, STATUS_DETAIL, scan
 from .units import format_duration, format_size
 from .verifier import (
     IDENTICAL,
     RECREATED,
+    STALE_COPY,
     compare,
+    example,
     fingerprint,
     snapshot,
     snapshot_diff,
+    split_differences,
 )
 
 _TAIL_BYTES = 4000
@@ -139,6 +149,112 @@ def _describe_failure(res: RunResult) -> str:
     return f"{res.failed_step} failed (exit {res.returncode})"
 
 
+def _check_space(total: int, sandbox_dir: Optional[Path], force: bool) -> None:
+    base = Path(sandbox_dir) if sandbox_dir else Path(tempfile.gettempdir())
+    base.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(str(base)).free
+    needed = int(total * 1.1) + (32 << 20)
+    if free < needed and not force:
+        raise AnalysisError(
+            f"the sandbox needs about {format_size(needed)} but only {format_size(free)} "
+            f"is free in {base}; use --sandbox-dir on another drive or --force"
+        )
+
+
+def _items(paths) -> str:
+    return "the item" if len(paths) == 1 else f"all {len(paths)} items"
+
+
+def _workflow_env() -> dict:
+    env = dict(os.environ)
+    env["BUILDDIET"] = "1"
+    return env
+
+
+def verify_joint(
+    root: Path,
+    cfg: Config,
+    paths: list,
+    proven_identity: dict,
+    *,
+    total_bytes: int,
+    sandbox_dir: Optional[Path] = None,
+    force: bool = False,
+    log: Callable[[str], None] = lambda _msg: None,
+) -> JointCheck:
+    """Remove all ``paths`` together in a fresh sandbox and apply the PROVEN invariants.
+
+    Same rules as a single experiment: the untouched copy must pass twice,
+    the workflow must pass with every item removed, every file of every item
+    must come back, and each must be byte-identical to the user's copy
+    (or, for items individually proven nondeterministic, fully recreated).
+    """
+    root = Path(root).resolve()
+    cfg.validate()
+    _check_space(total_bytes, sandbox_dir, force)
+    original_before = snapshot(root, skip_top=(CONFIG_DIR,))
+    env = _workflow_env()
+    with Sandbox(root, base=sandbox_dir) as sb:
+        env["BUILDDIET_SANDBOX"] = str(sb.project)
+        log(f"joint     {len(paths)} items of {root.name}: copying {format_size(total_bytes)} ...")
+        sb.populate()
+        targets = {p: sb.target(p) for p in paths}
+        originals = {p: fingerprint(t, cfg.hash_mode) for p, t in targets.items()}
+        gone = [p for p, fp in originals.items() if not fp.entries]
+        if gone:
+            return JointCheck(False, f"{gone[0]} is missing or empty now; re-run `builddiet analyze`")
+
+        for name in ("cold", "warm"):
+            base_run = run_workflow(cfg, sb.project, sb.logs / f"joint-baseline-{name}.log", env)
+            if not base_run.ok:
+                return JointCheck(
+                    False,
+                    f"the workflow no longer passes on the untouched copy "
+                    f"({_describe_failure(base_run)}); re-run `builddiet analyze`",
+                    fatal=True,
+                )
+        warm_seconds = base_run.seconds
+
+        for p in paths:
+            sb.set_aside(p)
+        res = run_workflow(cfg, sb.project, sb.logs / "joint.log", env)
+        if not res.ok:
+            return JointCheck(False, f"with {_items(paths)} removed together, {_describe_failure(res)}")
+
+        identities, problems = {}, []
+        for p in paths:
+            identity, detail = compare(originals[p], fingerprint(targets[p], cfg.hash_mode))
+            identities[p] = identity
+            if identity == IDENTICAL:
+                continue
+            if identity == RECREATED and proven_identity.get(p) == RECREATED:
+                continue  # individually proven nondeterministic: full recreation is the invariant
+            problems.append(f"{p}: {detail}")
+        if problems:
+            return JointCheck(
+                False,
+                f"with {_items(paths)} removed together, the workflow passed but "
+                + "; ".join(problems),
+                identities=identities,
+            )
+        rebuild = round(rebuild_penalty(res.seconds, warm_seconds), 3)
+
+    changed = snapshot_diff(original_before, snapshot(root, skip_top=(CONFIG_DIR,)))
+    if changed:
+        return JointCheck(
+            False,
+            f"{len(changed)} files in the ORIGINAL project changed during verification "
+            f"(e.g. {changed[0]}); the result cannot be trusted",
+            fatal=True,
+        )
+    return JointCheck(
+        True,
+        f"with {_items(paths)} removed together, everything was recreated and verify passed",
+        rebuild_seconds=rebuild,
+        identities=identities,
+    )
+
+
 def analyze(
     root: Path,
     cfg: Config,
@@ -171,26 +287,17 @@ def analyze(
                 + " (add them to candidates.include or lower min_size)"
             )
 
-    base = Path(sandbox_dir) if sandbox_dir else Path(tempfile.gettempdir())
-    base.mkdir(parents=True, exist_ok=True)
-    free = shutil.disk_usage(str(base)).free
-    needed = int(total * 1.1) + (32 << 20)
-    if free < needed and not force:
-        raise AnalysisError(
-            f"the sandbox needs about {format_size(needed)} but only {format_size(free)} "
-            f"is free in {base}; use --sandbox-dir on another drive or --force"
-        )
-
+    _check_space(total, sandbox_dir, force)
     warnings = []
     original_before = snapshot(root, skip_top=(CONFIG_DIR,))
-    env = dict(os.environ)
-    env["BUILDDIET"] = "1"
+    env = _workflow_env()
 
     with Sandbox(root, base=sandbox_dir, keep=keep_sandbox) as sb:
         env["BUILDDIET_SANDBOX"] = str(sb.project)
         log(f"sandbox   {sb.root}")
         log(f"copying   {format_size(total)} ...")
         sb.populate()
+        originals = {r.path: fingerprint(sb.target(r.path), cfg.hash_mode) for r in targets}
 
         log("baseline  cold run ...")
         cold = run_workflow(cfg, sb.project, sb.logs / "baseline-cold.log", env)
@@ -212,18 +319,22 @@ def analyze(
             entry = entries[region.path]
             prefix = f"[{index}/{len(targets)}] {region.display} ({format_size(region.bytes)})"
             path = sb.target(region.path)
-            before = fingerprint(path, cfg.hash_mode)
-            if not before.entries:
+            original = originals[region.path]
+            if not original.entries or not os.path.lexists(path):
                 entry.verdict = INCONCLUSIVE
-                entry.detail = "missing or empty in the sandbox after the baseline run"
+                entry.detail = "empty, or removed by the baseline run itself"
                 log(f"{prefix} INCONCLUSIVE: {entry.detail}")
                 continue
-            token = sb.set_aside(region.path)
-            try:
-                res = run_workflow(cfg, sb.project, sb.logs / f"experiment-{index}.log", env)
-                after = fingerprint(path, cfg.hash_mode)
-            finally:
-                sb.restore(region.path, token)
+
+            def trial(tag: str):
+                token = sb.set_aside(region.path)
+                try:
+                    result = run_workflow(cfg, sb.project, sb.logs / f"experiment-{index}{tag}.log", env)
+                    return result, fingerprint(path, cfg.hash_mode)
+                finally:
+                    sb.restore(region.path, token)
+
+            res, after = trial("")
             entry.run_seconds = round(res.seconds, 3)
             if res.timed_out:
                 entry.verdict = INCONCLUSIVE
@@ -235,15 +346,36 @@ def analyze(
                 entry.detail = f"without it, {_describe_failure(res)}"
                 entry.log_tail = res.log_tail
             else:
-                identity, detail = compare(before, after)
+                identity, detail = compare(original, after)
                 entry.identity = identity
-                if identity in (IDENTICAL, RECREATED):
+                entry.detail = detail
+                if identity == IDENTICAL:
                     entry.verdict = PROVEN
-                    entry.rebuild_seconds = round(rebuild_penalty(res.seconds, warm.seconds), 3)
-                    entry.detail = detail
+                elif identity == RECREATED:
+                    res2, after2 = trial("-repeat")
+                    stale, varying = split_differences(original, after, after2)
+                    if not res2.ok:
+                        entry.verdict = INCONCLUSIVE
+                        entry.detail = f"a repeated regeneration failed ({_describe_failure(res2)}): flaky workflow"
+                    elif stale:
+                        entry.verdict = STALE
+                        entry.identity = STALE_COPY
+                        entry.detail = (
+                            f"{len(stale)} of {len(original)} files are regenerated identically twice "
+                            f"but differ from the current copy{example(stale)}: stale or corrupt "
+                            "output, or hand edits. The current bytes are not reproducible."
+                        )
+                    else:
+                        entry.verdict = PROVEN
+                        entry.detail = (
+                            f"all {len(original)} files recreated; {len(varying)} differ on every "
+                            f"regeneration (nondeterministic output){example(varying)}"
+                        )
                 else:
                     entry.verdict = NOT_REGENERATED
                     entry.detail = f"the workflow passes without it but does not recreate it: {detail}"
+                if entry.verdict in (PROVEN, STALE):
+                    entry.rebuild_seconds = round(rebuild_penalty(res.seconds, warm.seconds), 3)
             extra = f", rebuild {format_duration(entry.rebuild_seconds)}" if entry.verdict == PROVEN else ""
             log(f"{prefix} {entry.verdict.upper()}{extra}")
 

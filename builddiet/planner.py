@@ -1,16 +1,24 @@
-"""Choose what to reclaim: the cheapest set of PROVEN directories that frees
+"""Choose what to reclaim: the cheapest set of PROVEN directories and files that frees
 at least the requested number of bytes.
 
 This is a min-cost covering knapsack. It is solved exactly (up to a size
 resolution of target/4000) with dynamic programming. Sizes are rounded
 *down*, so the chosen set is guaranteed to free at least the target.
+
+Items are proven one at a time (leave-one-out), which says nothing about
+removing them together: two artifacts that regenerate each other are each
+PROVEN, but deleting both loses them. :func:`search_verified` therefore
+treats every solution as a CANDIDATE and only accepts it once a joint
+removal check passes, trying the next-cheapest candidates otherwise.
 """
 
 from __future__ import annotations
 
+import heapq
 from array import array
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, Optional
 
 from .cost import expected_penalty, reuse_probability
 from .model import PROVEN
@@ -28,6 +36,7 @@ class PlanItem:
     rebuild_seconds: float
     reuse: float = 1.0
     identity: str = IDENTICAL
+    kind: str = "dir"
 
     @property
     def cost(self) -> float:
@@ -43,6 +52,7 @@ class PlanItem:
             "reuse": self.reuse,
             "expected_seconds": self.cost,
             "identity": self.identity,
+            "kind": self.kind,
         }
 
 
@@ -97,6 +107,7 @@ def collect_items(manifests, strict: bool = False) -> list:
                     rebuild_seconds=e.get("rebuild_seconds") or 0.0,
                     reuse=reuse_probability(reuse, e["path"]),
                     identity=e.get("identity") or IDENTICAL,
+                    kind=e.get("kind", "dir"),
                 )
             )
     return items
@@ -179,3 +190,129 @@ def solve(items, target: int, resolution: int = RESOLUTION) -> Plan:
         chosen.append(item)
     chosen.reverse()
     return Plan(target, chosen, True)
+
+
+@dataclass
+class JointCheck:
+    """Outcome of removing a group of plan items together in a sandbox."""
+
+    ok: bool
+    detail: str
+    fatal: bool = False  # no plan for this project can be verified (e.g. baseline fails)
+    rebuild_seconds: Optional[float] = None
+    identities: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "ok": self.ok,
+            "detail": self.detail,
+            "fatal": self.fatal,
+            "rebuild_seconds": self.rebuild_seconds,
+            "identities": self.identities,
+        }
+
+
+@dataclass
+class Attempt:
+    plan: Plan
+    checks: dict  # project root -> JointCheck
+
+    @property
+    def ok(self) -> bool:
+        return all(c.ok for c in self.checks.values())
+
+    def to_dict(self) -> dict:
+        return {
+            "plan": self.plan.to_dict(),
+            "jointly_verified": self.ok,
+            "checks": {root: c.to_dict() for root, c in self.checks.items()},
+        }
+
+
+@dataclass
+class PlanSearch:
+    target: int
+    first: Plan
+    attempts: list = field(default_factory=list)
+    verified: Optional[Attempt] = None
+    stopped: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "target_bytes": self.target,
+            "feasible": self.first.feasible,
+            "jointly_verified": self.verified is not None,
+            "verified_plan": self.verified.to_dict() if self.verified else None,
+            "candidates": [a.to_dict() for a in self.attempts],
+            "stopped": self.stopped,
+        }
+
+
+def item_key(item: PlanItem) -> tuple:
+    return (item.root, item.path)
+
+
+def search_verified(
+    items,
+    target: int,
+    verify_group: Callable[[str, list], JointCheck],
+    max_attempts: int = 5,
+) -> PlanSearch:
+    """Cheapest plan whose items survive being removed together.
+
+    Candidates are explored cheapest first. When a candidate fails, its
+    failing items are excluded one at a time and the knapsack is solved again
+    (Lawler-style branching), so every plan that avoids at least one of them
+    remains reachable. Supersets of a failed set are not tried: removing more
+    cannot bring back what a smaller removal lost. ``verify_group(root, items)``
+    is called at most once per distinct (project, item set).
+    """
+    first = solve(items, target)
+    search = PlanSearch(target, first)
+    if not first.feasible:
+        search.stopped = "not enough proven space for this target"
+        return search
+
+    memo: dict = {}
+    seen: set = set()
+    counter = 0
+    heap = [(first.cost, counter, first, frozenset())]
+    while heap:
+        if len(search.attempts) >= max_attempts:
+            search.stopped = f"stopped after {max_attempts} candidate plans (--max-attempts)"
+            return search
+        _, _, plan, excluded = heapq.heappop(heap)
+        keys = frozenset(item_key(i) for i in plan.items)
+        if keys in seen:
+            continue
+        seen.add(keys)
+
+        groups: dict = {}
+        for item in plan.items:
+            groups.setdefault(item.root, []).append(item)
+        checks = {}
+        for root, group in groups.items():
+            memo_key = (root, frozenset(i.path for i in group))
+            if memo_key not in memo:
+                memo[memo_key] = verify_group(root, group)
+            checks[root] = memo[memo_key]
+        attempt = Attempt(plan, checks)
+        search.attempts.append(attempt)
+        if attempt.ok:
+            search.verified = attempt
+            return search
+        if any(c.fatal for c in checks.values()):
+            search.stopped = "joint verification cannot run: " + next(
+                c.detail for c in checks.values() if c.fatal
+            )
+            return search
+
+        failing = [i for i in plan.items if not checks[i.root].ok]
+        for item in failing:
+            banned = excluded | {item_key(item)}
+            alternative = solve([i for i in items if item_key(i) not in banned], target)
+            if alternative.feasible:
+                counter += 1
+                heapq.heappush(heap, (alternative.cost, counter, alternative, banned))
+    search.stopped = "no other candidate plan reaches the target"
+    return search

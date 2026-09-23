@@ -7,6 +7,13 @@
     arena/derived/*.bin    derived, slow (0.4s)    -> PROVEN identical
     cache/stamp.txt        derived, timestamped    -> PROVEN recreated
     family_photos/*        not needed, not derived -> NOT REGENERATED
+    index.txt              derived single file     -> PROVEN identical
+    summary.txt            derived, corrupted copy -> STALE (not rebuilt: exists)
+    always.txt             derived, old copy       -> STALE (baseline refreshes it)
+    README.txt             not needed, not derived -> NOT REGENERATED
+
+summary.txt and always.txt are corrupted by the test after the derived data
+has been materialised; see ``corrupt_derived``.
 """
 
 from __future__ import annotations
@@ -32,6 +39,12 @@ if not os.path.exists(table):
 os.makedirs("cache", exist_ok=True)
 with open(os.path.join("cache", "stamp.txt"), "w") as f:
     f.write(repr(time.time()))
+for name, text in (("index.txt", src[::-1] * 3), ("summary.txt", str(len(src)))):
+    if not os.path.exists(name):
+        with open(name, "w") as f:
+            f.write(text)
+with open("always.txt", "w") as f:
+    f.write(src.upper())
 '''
 
 CHECK = r'''
@@ -53,6 +66,11 @@ def make_project(root: Path) -> Path:
     (root / "family_photos" / "beach.jpg").write_bytes(os.urandom(20000))
     (root / "README.txt").write_text("fixture\n")
     return root
+
+
+def corrupt_derived(root: Path) -> None:
+    (Path(root) / "summary.txt").write_text("truncated")
+    (Path(root) / "always.txt").write_text("output of an older version")
 
 
 def fixture_config(**overrides) -> Config:

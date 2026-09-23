@@ -8,8 +8,10 @@ BuildDiet exists because people are afraid to delete the wrong thing. It must ne
 2. **Destruction happens only in the sandbox.** `Sandbox.target()` normalises every path, rejects `..`, absolute paths and the sandbox root itself, and checks that the result resolves inside the sandbox copy. `set_aside`/`restore` go through it.
 3. **The sandbox can't be inside the project.** This is checked at construction, and again before the sandbox is removed.
 4. **No proof without a passing baseline.** The workflow must pass on the untouched copy twice (cold and warm). Otherwise the analysis aborts.
-5. **"Not required" is not "disposable".** A directory counts as PROVEN only if the workflow recreated all of its files and verify passed. A directory that the workflow simply ignores is reported as NOT REGENERATED and is never offered for reclaiming.
+5. **"Not required" is not "disposable".** A candidate counts as PROVEN only if the workflow recreated all of its files and verify passed. A candidate that the workflow simply ignores is reported as NOT REGENERATED and is never offered for reclaiming.
+5b. **"Regenerable" is not "your bytes are regenerable".** Identity is checked against the user's original bytes, which are fingerprinted before any workflow run. If the workflow reproducibly produces something different (a stale or corrupt output, or hand edits), the verdict is STALE and the candidate is never offered.
 6. **Proofs expire.** The manifest records the platform, git HEAD, a hash of top-level project files, and the config digest. `plan` refuses stale proofs unless `--allow-stale` is passed.
+6b. **Plans are verified jointly.** `plan` presents a set as a JOINTLY VERIFIED PLAN only after removing all of its items together in a sandbox and re-checking the PROVEN invariants. A set that fails is shown as a rejected candidate and is never presented as safe. `--no-verify` output is labelled NOT JOINTLY VERIFIED.
 7. **v0.1 does not delete.** `plan` prints a list. You decide.
 
 ## What BuildDiet can't protect you from

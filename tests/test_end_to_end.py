@@ -8,10 +8,10 @@ from pathlib import Path
 from builddiet import cli, manifest
 from builddiet.config import write_config
 from builddiet.experiment import AnalysisError, analyze
-from builddiet.model import NOT_REGENERATED, PROVEN, REQUIRED, UNTESTED
+from builddiet.model import NOT_REGENERATED, PROVEN, REQUIRED, STALE
 from builddiet.verifier import IDENTICAL, RECREATED, fingerprint
 
-from tests.helpers import fixture_config, make_project
+from tests.helpers import corrupt_derived, fixture_config, make_project
 
 
 class EndToEndTest(unittest.TestCase):
@@ -23,6 +23,7 @@ class EndToEndTest(unittest.TestCase):
         cfg = fixture_config()
         for cmd in (cfg.regenerate, cfg.verify):
             subprocess.run(cmd, shell=True, cwd=cls.root, check=True)
+        corrupt_derived(cls.root)
         cls.original = fingerprint(cls.root, "full")
         cls.manifest = analyze(cls.root, fixture_config())
         cls.by_path = {e["path"]: e for e in cls.manifest["entries"]}
@@ -63,8 +64,30 @@ class EndToEndTest(unittest.TestCase):
             self.by_path["arena"]["rebuild_seconds"], self.by_path["build"]["rebuild_seconds"]
         )
 
-    def test_loose_files_are_untested(self):
-        self.assertEqual(self.by_path["*"]["verdict"], UNTESTED)
+    def test_single_files_are_experimented_on(self):
+        index = self.by_path["index.txt"]
+        self.assertEqual(index["kind"], "file")
+        self.assertEqual(index["verdict"], PROVEN)
+        self.assertEqual(index["identity"], IDENTICAL)
+        self.assertEqual(self.by_path["README.txt"]["verdict"], NOT_REGENERATED)
+        self.assertNotIn("*", self.by_path)  # min_size=0: every file is a candidate
+
+    def test_corrupt_derived_copy_is_stale(self):
+        # not rebuilt by the baseline because it exists
+        self.assertEqual(self.by_path["summary.txt"]["verdict"], STALE)
+
+    def test_stale_copy_refreshed_by_baseline_is_still_stale(self):
+        # Regression: fingerprints must describe the user's bytes, not the
+        # copy the baseline run refreshed.
+        self.assertEqual(self.by_path["always.txt"]["verdict"], STALE)
+
+    def test_stale_is_never_planned(self):
+        from builddiet.planner import collect_items
+
+        paths = {i.path for i in collect_items([self.manifest])}
+        self.assertIn("index.txt", paths)
+        self.assertNotIn("summary.txt", paths)
+        self.assertNotIn("always.txt", paths)
 
     def test_totals_cover_workspace(self):
         self.assertEqual(
@@ -84,9 +107,10 @@ class EndToEndTest(unittest.TestCase):
             text = out.getvalue()
             self.assertIn("SPACE YOU CAN PROVABLY RECLAIM", text)
             self.assertIn("family_photos/", text)
-            # build/ (800 B, fast) covers 500 B; arena/ (slow) must not be chosen
+            # build/ and index.txt each cover 500 B at ~0s (noise decides which);
+            # arena/ (0.4s) must never be chosen.
             plan_part = text.split("BUILDDIET PLAN")[1].split("BUILDDIET BACKUP")[0]
-            self.assertIn("build/", plan_part)
+            self.assertTrue("build/" in plan_part or "index.txt" in plan_part)
             self.assertNotIn("arena/", plan_part)
         finally:
             (self.root / ".builddiet" / "manifest.json").unlink()

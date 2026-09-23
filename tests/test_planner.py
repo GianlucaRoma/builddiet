@@ -1,6 +1,6 @@
 import unittest
 
-from builddiet.planner import PlanItem, size_first, solve
+from builddiet.planner import JointCheck, PlanItem, search_verified, size_first, solve
 
 GB = 10**9
 
@@ -62,6 +62,54 @@ class PlannerTest(unittest.TestCase):
                 self.assertGreaterEqual(plan.freed, target)
                 # exact up to the size resolution
                 self.assertLessEqual(plan.cost, best + 1e-6 + 0.02 * best)
+
+
+class JointSearchTest(unittest.TestCase):
+    """search_verified with a fake joint check: A and B only regenerate from each other."""
+
+    def setUp(self):
+        self.items = [item("A", 10, 0), item("B", 10, 0), item("C", 12, 30)]
+        self.calls = []
+
+    def verify(self, root, group):
+        paths = {i.path for i in group}
+        self.calls.append(frozenset(paths))
+        ok = not {"A", "B"} <= paths
+        return JointCheck(ok, "ok" if ok else "A and B removed together are lost", rebuild_seconds=1.0)
+
+    def test_rejects_mutual_pair_and_finds_next_plan(self):
+        search = search_verified(self.items, 15 * GB, self.verify)
+        first = {i.path for i in search.attempts[0].plan.items}
+        self.assertEqual(first, {"A", "B"})  # cheapest candidate
+        self.assertFalse(search.attempts[0].ok)
+        verified = {i.path for i in search.verified.plan.items}
+        self.assertIn("C", verified)
+        self.assertFalse({"A", "B"} <= verified)
+
+    def test_no_jointly_verified_plan(self):
+        search = search_verified(self.items, 30 * GB, self.verify)  # needs A+B+C
+        self.assertIsNone(search.verified)
+        self.assertEqual(len(search.attempts), 1)
+        self.assertIn("no other candidate", search.stopped)
+
+    def test_verified_first_try_costs_one_check(self):
+        search = search_verified(self.items, 5 * GB, self.verify)
+        self.assertIsNotNone(search.verified)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_attempt_limit(self):
+        search = search_verified(self.items, 15 * GB, self.verify, max_attempts=1)
+        self.assertIsNone(search.verified)
+        self.assertIn("--max-attempts", search.stopped)
+
+    def test_fatal_check_stops_search(self):
+        def fatal(root, group):
+            return JointCheck(False, "baseline fails", fatal=True)
+
+        search = search_verified(self.items, 15 * GB, fatal)
+        self.assertIsNone(search.verified)
+        self.assertEqual(len(search.attempts), 1)
+        self.assertIn("baseline fails", search.stopped)
 
 
 if __name__ == "__main__":

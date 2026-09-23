@@ -47,6 +47,19 @@ class ScannerTest(unittest.TestCase):
         total = sum(r.bytes for r in regions.values())
         self.assertEqual(total, 5000 + 3000 + 2000 + 10 + 4000 + 7000 + 5 + 20 + 2)
 
+    def test_file_candidates(self):
+        write(self.root / "dataset.bin", 500)
+        cfg = Config(verify="x", include=["experiments/runs/r.bin"], min_size=100)
+        regions = {r.path: r for r in scan(self.root, cfg)}
+        self.assertEqual(regions["dataset.bin"].kind, "file")
+        self.assertEqual(regions["dataset.bin"].status, CANDIDATE)
+        self.assertEqual(regions["experiments/runs/r.bin"].kind, "file")
+        self.assertEqual(regions["experiments/runs/r.bin"].status, CANDIDATE)
+        self.assertNotIn("experiments/runs", regions)
+        self.assertEqual(regions["*"].files, 1)  # package.json is below min_size
+        self.assertEqual(sum(r.bytes for r in regions.values()),
+                         5000 + 3000 + 2000 + 10 + 4000 + 7000 + 5 + 20 + 2 + 500)
+
     def test_auto_off(self):
         cfg = Config(verify="x", auto=False, include=["experiments/cache"], min_size=0)
         regions = {r.path: r for r in scan(self.root, cfg)}
@@ -96,6 +109,22 @@ class VerifierTest(unittest.TestCase):
             (d / "sub" / "b").unlink()
             self.assertEqual(compare(before, fingerprint(d))[0], PARTIAL)
             self.assertEqual(compare(before, fingerprint(Path(tmp) / "missing"))[0], ABSENT)
+
+    def test_split_differences(self):
+        from builddiet.verifier import Fingerprint, split_differences
+
+        original = Fingerprint({"a": (1, "o"), "b": (1, "o"), "c": (1, "same")})
+        first = Fingerprint({"a": (1, "x"), "b": (1, "t1"), "c": (1, "same")})
+        second = Fingerprint({"a": (1, "x"), "b": (1, "t2"), "c": (1, "same")})
+        self.assertEqual(split_differences(original, first, second), (["a"], ["b"]))
+
+    def test_single_file_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = Path(tmp) / "f.bin"
+            write(f, 10)
+            fp = fingerprint(f)
+            self.assertEqual(list(fp.entries), ["."])
+            self.assertEqual(fp.total_bytes, 10)
 
 
 if __name__ == "__main__":

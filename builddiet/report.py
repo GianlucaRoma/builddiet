@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .model import (
     BUCKET_KNOWN,
     BUCKET_LABELS,
@@ -9,9 +11,11 @@ from .model import (
     BUCKET_ORDER,
     BUCKET_REGENERABLE,
     BUCKET_REQUIRED,
+    BUCKET_STALE,
     BUCKET_UNKNOWN,
     bucket,
     bucket_totals,
+    display,
 )
 from .units import format_duration, format_size
 
@@ -33,10 +37,6 @@ def table(rows, headers=None, right=()) -> str:
         if headers and n == 0:
             out.append("  " + "   ".join("-" * w for w in widths))
     return "\n".join(out)
-
-
-def _display(entry: dict) -> str:
-    return entry["path"] + "/" if entry["kind"] == "dir" else entry["path"]
 
 
 def _sorted(entries):
@@ -68,7 +68,7 @@ def render_report(m: dict) -> str:
     lines += ["", RULE, "SPACE YOU CAN PROVABLY RECLAIM", RULE]
     if proven:
         rows = [
-            [_display(e), format_size(e["bytes"]), format_duration(e["rebuild_seconds"]), e["identity"]]
+            [display(e), format_size(e["bytes"]), format_duration(e["rebuild_seconds"]), e["identity"]]
             for e in proven
         ]
         rows.append(["TOTAL", format_size(totals[BUCKET_REGENERABLE]),
@@ -82,6 +82,10 @@ def render_report(m: dict) -> str:
         (BUCKET_NOT_REGENERATED,
          "NOT REGENERATED - the workflow passes without these, but nothing\n"
          "recreates them. That is NOT proof they are disposable. Keep them."),
+        (BUCKET_STALE,
+         "STALE - the workflow recreates these, but deterministically with DIFFERENT\n"
+         "bytes than your current copy: stale or corrupt output, or hand edits.\n"
+         "Excluded from plans. Review before deleting."),
         (BUCKET_KNOWN, "KNOWN - catalog says regenerable by convention; not proven here"),
         (BUCKET_UNKNOWN, "UNKNOWN / NOT TESTED"),
     ]
@@ -93,7 +97,7 @@ def render_report(m: dict) -> str:
         rows = []
         for e in group[:25]:
             note = e.get("known") if key == BUCKET_KNOWN else e.get("detail", "")
-            rows.append([_display(e), format_size(e["bytes"]), note or ""])
+            rows.append([display(e), format_size(e["bytes"]), note or ""])
         lines.append(table(rows, right=(1,)))
         if len(group) > 25:
             lines.append(f"  ... and {len(group) - 25} more")
@@ -104,38 +108,85 @@ def render_report(m: dict) -> str:
     return "\n".join(lines)
 
 
-def render_plan(plan, naive=None, skipped=(), multi=False) -> str:
-    lines = [f"BUILDDIET PLAN - free {format_size(plan.target)}", ""]
-    for reason in skipped:
-        lines.append(f"  ! skipped {reason}")
-    if skipped:
-        lines.append("")
-    if not plan.items:
-        lines.append("  no PROVEN regenerable directories available (run `builddiet analyze`)")
-        return "\n".join(lines)
+def _plan_table(plan, multi: bool) -> str:
     headers = (["project"] if multi else []) + ["path", "size", "rebuild", "p(reuse)", "expected"]
     rows = []
     for i in plan.items:
         row = [i.project] if multi else []
-        row += [i.path + "/", format_size(i.bytes), format_duration(i.rebuild_seconds),
+        row += [display(i), format_size(i.bytes), format_duration(i.rebuild_seconds),
                 f"{i.reuse:.2f}", format_duration(i.cost)]
         rows.append(row)
     total = ["TOTAL", ""] if multi else ["TOTAL"]
     total += [format_size(plan.freed), format_duration(plan.rebuild_seconds), "", format_duration(plan.cost)]
     rows.append(total)
     offset = 1 if multi else 0
-    lines.append(table(rows, headers, right=tuple(c + offset for c in (1, 2, 3, 4))))
-    lines.append("")
-    if not plan.feasible:
-        lines.append(
-            f"  Not enough proven space: at most {format_size(plan.freed)} can be reclaimed "
-            f"with proof (target {format_size(plan.target)})."
-        )
-    else:
-        lines.append(f"  Frees {format_size(plan.freed)}; expected rebuild penalty "
-                     f"{format_duration(plan.cost)} (worst case {format_duration(plan.rebuild_seconds)}).")
-    if naive is not None and naive.feasible and naive.cost > plan.cost + 1e-9:
-        lines.append(f"  Deleting biggest-first would cost {format_duration(naive.cost)} instead.")
+    return table(rows, headers, right=tuple(c + offset for c in (1, 2, 3, 4)))
+
+
+def render_plan(search, naive=None, skipped=(), multi=False, verified_requested=True) -> str:
+    """Render a planner search. Only a JOINTLY VERIFIED PLAN is presented as safe."""
+    first = search.first
+    lines = [f"BUILDDIET PLAN - free {format_size(search.target)}", ""]
+    for reason in skipped:
+        lines.append(f"  ! skipped {reason}")
+    if skipped:
+        lines.append("")
+    if not first.items:
+        lines.append("  nothing PROVEN regenerable available (run `builddiet analyze`)")
+        return "\n".join(lines)
+    if not first.feasible:
+        lines += [
+            "CANDIDATE PLAN (not enough proven space; not verified)",
+            _plan_table(first, multi),
+            "",
+            f"  At most {format_size(first.freed)} can be reclaimed with individual proofs "
+            f"(target {format_size(search.target)}).",
+        ]
+        return "\n".join(lines)
+
+    if not verified_requested:
+        lines += [
+            "CANDIDATE PLAN - NOT JOINTLY VERIFIED (--no-verify)",
+            _plan_table(first, multi),
+            "",
+            f"  Frees {format_size(first.freed)}; expected rebuild penalty {format_duration(first.cost)}.",
+            "  Built from individual (leave-one-out) proofs only: removing these items",
+            "  together has NOT been tested. Run without --no-verify before deleting.",
+        ]
+        return "\n".join(lines)
+
+    for n, attempt in enumerate(search.attempts, 1):
+        lines += [f"CANDIDATE PLAN #{n}", _plan_table(attempt.plan, multi)]
+        for root, check in attempt.checks.items():
+            where = f" [{Path(root).name}]" if multi else ""
+            status = "PASSED" if check.ok else "FAILED"
+            lines.append(f"  -> joint check{where} {status}: {check.detail}")
+        lines.append("")
+
+    lines.append("=" * 64)
+    if search.verified is None:
+        lines += [
+            f"NO JOINTLY VERIFIED PLAN for {format_size(search.target)}",
+            "=" * 64,
+            f"  {search.stopped}.",
+            "  The candidates above are NOT safe to delete together.",
+        ]
+        return "\n".join(lines)
+
+    plan = search.verified.plan
+    joint = [c.rebuild_seconds for c in search.verified.checks.values()]
+    lines += [
+        "JOINTLY VERIFIED PLAN",
+        "=" * 64,
+        _plan_table(plan, multi),
+        "",
+        f"  Frees {format_size(plan.freed)}. All items were removed together in a sandbox:",
+        f"  the workflow recreated them and verify passed. Measured joint rebuild "
+        f"{format_duration(sum(joint))} (individual estimates sum to {format_duration(plan.rebuild_seconds)}).",
+    ]
+    # only mention it when the difference is above timing noise
+    if naive is not None and naive.feasible and naive.cost - plan.cost > max(0.05, 0.05 * plan.cost):
+        lines.append(f"  An unverified biggest-first choice would cost {format_duration(naive.cost)}.")
     lines += ["", "  Nothing was deleted. Review the list, then delete it yourself."]
     return "\n".join(lines)
 
@@ -143,7 +194,8 @@ def render_plan(plan, naive=None, skipped=(), multi=False) -> str:
 def render_backup(m: dict) -> str:
     entries = m["entries"]
     totals = bucket_totals(entries)
-    must = [e for e in entries if bucket(e) in (BUCKET_REQUIRED, BUCKET_NOT_REGENERATED, BUCKET_UNKNOWN)]
+    must = [e for e in entries
+            if bucket(e) in (BUCKET_REQUIRED, BUCKET_NOT_REGENERATED, BUCKET_STALE, BUCKET_UNKNOWN)]
     must_total = sum(e["bytes"] for e in must)
     lines = [
         f"BUILDDIET BACKUP PLAN - {m['name']}",
@@ -160,7 +212,7 @@ def render_backup(m: dict) -> str:
         RULE,
         "MUST BACK UP",
         RULE,
-        table([[_display(e), format_size(e["bytes"]), BUCKET_LABELS[bucket(e)]] for e in _sorted(must)],
+        table([[display(e), format_size(e["bytes"]), BUCKET_LABELS[bucket(e)]] for e in _sorted(must)],
               right=(1,)),
         "",
         "  Regenerable does not mean 'never back up': it means these bytes can be",
@@ -183,12 +235,12 @@ def render_scan(manifests_with_state, unanalyzed=()) -> str:
             format_size(m["total_bytes"]),
             format_size(totals[BUCKET_REQUIRED]),
             format_size(totals[BUCKET_REGENERABLE]),
-            format_size(totals[BUCKET_NOT_REGENERATED] + totals[BUCKET_UNKNOWN] + totals[BUCKET_KNOWN]),
+            format_size(m["total_bytes"] - totals[BUCKET_REQUIRED] - totals[BUCKET_REGENERABLE]),
             "STALE" if stale else "ok",
         ])
     rows.append(["TOTAL", format_size(grand_total), format_size(grand[BUCKET_REQUIRED]),
                  format_size(grand[BUCKET_REGENERABLE]),
-                 format_size(grand[BUCKET_NOT_REGENERATED] + grand[BUCKET_UNKNOWN] + grand[BUCKET_KNOWN]), ""])
+                 format_size(grand_total - grand[BUCKET_REQUIRED] - grand[BUCKET_REGENERABLE]), ""])
     lines = [
         "BUILDDIET SCAN",
         "",

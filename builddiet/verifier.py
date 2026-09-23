@@ -12,6 +12,7 @@ IDENTICAL = "identical"  # every file recreated with the same content
 RECREATED = "recreated"  # every file recreated, some with different bytes
 PARTIAL = "partial"  # some files never came back
 ABSENT = "absent"  # nothing came back
+STALE_COPY = "stale"  # recreated deterministically, but differs from the current copy
 
 _CHUNK = 1 << 20
 
@@ -65,6 +66,11 @@ def fingerprint(path: Path, mode: str = "full") -> Fingerprint:
     return fp
 
 
+def example(paths) -> str:
+    """' (e.g. x)' for a directory; nothing for a single file (its key is '.')."""
+    return "" if not paths or paths[0] == "." else f" (e.g. {paths[0]})"
+
+
 def compare(before: Fingerprint, after: Fingerprint) -> tuple:
     """Return (identity, human readable detail)."""
     if not after.entries:
@@ -72,17 +78,29 @@ def compare(before: Fingerprint, after: Fingerprint) -> tuple:
     missing = [k for k in before.entries if k not in after.entries]
     if missing:
         return PARTIAL, (
-            f"{len(missing)} of {len(before)} files were not recreated "
-            f"(e.g. {missing[0]})"
+            f"{len(missing)} of {len(before)} files were not recreated{example(missing)}"
         )
     changed = [k for k, v in before.entries.items() if after.entries[k] != v]
     if changed:
         return RECREATED, (
             f"all {len(before)} files recreated, {len(changed)} with different "
-            f"content (e.g. {changed[0]})"
+            f"content{example(changed)}"
         )
     how = "byte-for-byte" if before.mode == "full" else "same paths and sizes"
     return IDENTICAL, f"all {len(before)} files recreated {how}"
+
+
+def split_differences(original: Fingerprint, first: Fingerprint, second: Fingerprint) -> tuple:
+    """Classify files whose first regeneration differs from the original.
+
+    Returns (stale, nondeterministic): files the workflow reproduces the same
+    way twice (so the original copy is what differs), and files whose
+    regenerated content varies from run to run.
+    """
+    differing = [k for k, v in original.entries.items() if first.entries.get(k) != v]
+    stale = [k for k in differing if second.entries.get(k) == first.entries.get(k)]
+    nondeterministic = [k for k in differing if k not in stale]
+    return stale, nondeterministic
 
 
 def snapshot(root: Path, skip_top=()) -> dict:
