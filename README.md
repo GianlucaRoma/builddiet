@@ -5,7 +5,7 @@
 You don't tell BuildDiet how much to delete. Point it at your projects folder: it finds out, by experiment in sandbox copies, what can be brought back byte-for-byte, how, and at what measured cost. Then it offers three verified options.
 
 ```bash
-pip install -e .
+pip install git+https://github.com/GianlucaRoma/builddiet
 builddiet analyze D:/Projects        # finds the projects, proves what it can, shows the options
 builddiet reclaim D:/Projects        # choose LEGGERO / NORMALE / ESTREMO, confirm, done
 builddiet restore D:/Projects/app    # anything back, byte-checked
@@ -238,8 +238,31 @@ builddiet/
   verifier.py, manifest.py, report.py, cli.py, adapters/
 tests/            unit + end-to-end tests (python -m unittest)
 benchmarks/       bd_zero/ and bd_real/ release gates, demo generator
-docs/             SAFETY, EXPERIMENT_MODEL, THREAT_MODEL, BD-ZERO, BD-REAL, BD-PRIOR
+docs/             SAFETY, EXPERIMENT_MODEL, THREAT_MODEL, TEST-ISOLATION, BD-ZERO, BD-REAL, BD-WATCH, BD-PRIOR
 ```
+
+## Install
+
+```bash
+pip install git+https://github.com/GianlucaRoma/builddiet        # latest main, no clone needed
+pip install git+https://github.com/GianlucaRoma/builddiet@v0.1.0 # a fixed release
+```
+
+From a clone: `pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). The package is not on PyPI yet.
+
+## Documentation
+
+| document | what it covers |
+|---|---|
+| [EXPERIMENT_MODEL](docs/EXPERIMENT_MODEL.md) | verification levels, verdicts, joint verification, the three options, `watch` |
+| [SAFETY](docs/SAFETY.md) | the invariants every deletion and restore obeys |
+| [THREAT_MODEL](docs/THREAT_MODEL.md) | what can go wrong and what stops it |
+| [BD-ZERO](docs/BD-ZERO.md) | release gate: zero configuration |
+| [BD-REAL](docs/BD-REAL.md) | release gate: a real make-style workspace |
+| [BD-WATCH](docs/BD-WATCH.md) | release gate: automatic mode on a real, nearly full disk |
+| [BD-PRIOR](docs/BD-PRIOR.md) | prior-art audit: how existing tools compare |
+| [TEST-ISOLATION](docs/TEST-ISOLATION.md) | how the tests are isolated, and the out-of-space investigation |
+| [CHANGELOG](CHANGELOG.md) | changes by version |
 
 ## Requirements
 
