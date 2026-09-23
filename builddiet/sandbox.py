@@ -52,12 +52,58 @@ def force_remove(path: Path) -> None:
         shutil.rmtree(path, onerror=_make_writable_and_retry)
 
 
+SANDBOX_ENV = "BUILDDIET_SANDBOX_DIR"
+
+
+def _fixed_drives() -> list:
+    """Local fixed drives on Windows (no network shares, no removable media)."""
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+        import string
+
+        get_type = ctypes.windll.kernel32.GetDriveTypeW
+        return [Path(f"{d}:\\") for d in string.ascii_uppercase if get_type(f"{d}:\\") == 3]
+    except (AttributeError, OSError):
+        return []
+
+
+def default_sandbox_base(project: Optional[Path] = None) -> Path:
+    """Where sandboxes go when --sandbox-dir is not given.
+
+    $BUILDDIET_SANDBOX_DIR if set; otherwise the local drive with the most free
+    space (``X:\\builddiet-sandboxes``), or the temp directory if that is best.
+    A sandbox is a full copy of the project, so it should not compete for the
+    space on the (often full) system drive.
+    """
+    env = os.environ.get(SANDBOX_ENV)
+    if env:
+        return Path(env)
+    temp = Path(tempfile.gettempdir())
+    best, best_free = temp, shutil.disk_usage(str(temp)).free
+    temp_drive = os.path.splitdrive(str(temp.resolve()))[0].upper()
+    for drive in _fixed_drives():
+        if str(drive)[:2].upper() == temp_drive:
+            continue
+        try:
+            free = shutil.disk_usage(str(drive)).free
+        except OSError:
+            continue
+        if free > best_free:
+            best, best_free = drive / "builddiet-sandboxes", free
+    if project is not None and is_within(best.resolve() if best.exists() else best,
+                                         Path(project).resolve()):
+        return temp
+    return best
+
+
 class Sandbox:
     """``with Sandbox(project) as sb: sb.populate(); ...``"""
 
     def __init__(self, source: Path, base: Optional[Path] = None, keep: bool = False):
         self.source = Path(source).resolve()
-        self.base = Path(base).resolve() if base else Path(tempfile.gettempdir()).resolve()
+        self.base = Path(base).resolve() if base else Path(default_sandbox_base(self.source)).resolve()
         if is_within(self.base, self.source):
             raise SandboxError(
                 f"the sandbox directory {self.base} is inside the project; "

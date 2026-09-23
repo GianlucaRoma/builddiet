@@ -66,6 +66,15 @@ def fingerprint(path: Path, mode: str = "full") -> Fingerprint:
     return fp
 
 
+def signature(fp: Fingerprint) -> str:
+    """One SHA-256 over every (path, size, digest) of a fingerprint."""
+    h = hashlib.sha256()
+    for rel in sorted(fp.entries):
+        size, digest = fp.entries[rel]
+        h.update(f"{rel}\0{size}\0{digest}\n".encode())
+    return h.hexdigest()
+
+
 def example(paths) -> str:
     """' (e.g. x)' for a directory; nothing for a single file (its key is '.')."""
     return "" if not paths or paths[0] == "." else f" (e.g. {paths[0]})"

@@ -10,7 +10,12 @@
 
 | Threat | Mitigation |
 |---|---|
-| A BuildDiet bug deletes original files | v0.1 has no delete command. Removal happens only through `Sandbox.target()`, which checks paths. The sandbox can't be inside the project. |
+| A BuildDiet bug deletes the wrong original files | Only `reclaim.py` deletes outside sandboxes, and only paths of a JOINTLY VERIFIED plan. Each is normalised, checked to be inside the project and not `.builddiet/`, and re-hashed against its proven signature right before deletion. |
+| An item changes between analysis and reclaim (the user edited it) | The signature check fails and nothing in that project is deleted (`tests/test_reclaim_watch.py`). |
+| The recovery source of an item was changed or deleted | `source_unchanged` is checked at joint verification and again right before deletion. |
+| Deleted data turns out to be needed right away | `restore` brings it back from the logged recovery (copy / archive / git / recipe / workflow) and checks the bytes. |
+| `watch --auto` deletes too much | Only down to `--keep-free`, only within `--max-penalty` of expected rebuild, only byte-identical items. Without `--auto` it always asks. |
+| A dialog is left unanswered or the session is non-interactive | Treated as "no". |
 | Path traversal in config or archives (`../x`, `..` members) | `normalize_rel` rejects absolute paths, drive letters and `..`. Archive restores skip members containing `..`. |
 | A discovered command is dangerous (`git push`, `rm -rf`, `curl`, `pip install`, `docker`, ...) | It is refused and listed as "never run" (`recipes.check_safe`), whatever its source. |
 | A discovered command uses an absolute path to the original project, so it would write to the original | Paths to the project are rewritten to `{project}`, which points at the sandbox. Any other absolute path is refused. |

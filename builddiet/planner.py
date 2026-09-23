@@ -173,8 +173,9 @@ def solve(items, target: int, resolution: int = RESOLUTION) -> Plan:
         rows.append(new)
         dp = new
 
-    if dp[cap] == inf:  # only possible through rounding: fall back
-        return greedy(items, target)
+    fallback = greedy(items, target)
+    if dp[cap] == inf:  # only possible through rounding
+        return fallback
 
     chosen = []
     t = cap
@@ -193,7 +194,12 @@ def solve(items, target: int, resolution: int = RESOLUTION) -> Plan:
             )
         chosen.append(item)
     chosen.reverse()
-    return Plan(target, chosen, True)
+    exact = Plan(target, chosen, True)
+    # Sizes were rounded down, so a target that is exactly reachable can look
+    # unreachable to the DP; never return something costlier than the greedy plan.
+    if fallback.feasible and fallback.cost < exact.cost:
+        return fallback
+    return exact
 
 
 @dataclass

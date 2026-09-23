@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-First public version. Report-only: BuildDiet never deletes anything of yours.
+First public version.
 
 * `builddiet analyze DIR` works with **no configuration**:
   * **Level 0** proves by SHA-256 that bytes exist elsewhere: identical copies, `.zip`/`.tar*` archives (members decompressed), git (`cat-file --filters`). Files tracked in git are reported as IN GIT and are not planned unless you pass `--include-git`.
@@ -10,5 +10,9 @@ First public version. Report-only: BuildDiet never deletes anything of yours.
 * **Level 2** (optional, `builddiet init`): a declared build + verify workflow, with REQUIRED / PROVEN / STALE / NOT REGENERATED verdicts.
 * **STALE** verdict: a deterministic regeneration that differs from the user's copy is never planned.
 * `plan --free SIZE`: an exact min-cost covering knapsack, then **joint verification**: the whole candidate plan is removed in a sandbox and must come back byte-for-byte. Otherwise the next plan is tried.
+* **`watch DIR`**: finds the projects under a folder and keeps a market of proofs. It prepares and jointly verifies a plan below 15% free, asks (desktop dialog / terminal) below 10%, and allows a bigger rebuild budget below 5%. `--auto` reclaims within `--keep-free` / `--max-penalty`.
+* **`reclaim`** deletes a jointly verified plan: byte-identical items only by default, each re-hashed before deletion and logged. **`restore`** brings items back and checks the bytes.
+* **`market DIR`**: every provably reclaimable item across projects with a LOW/MEDIUM/HIGH value.
+* Sandboxes default to the local drive with the most free space (`$BUILDDIET_SANDBOX_DIR` to pin it).
 * `report`, `backup-plan`, `scan` across projects.
-* Release gates: BD-ZERO (zero-configuration), BD-REAL (declared workflow), BD-PRIOR (prior-art audit).
+* Release gates: BD-ZERO (zero-configuration), BD-REAL (declared workflow), BD-WATCH (automatic mode on a real near-full drive), BD-PRIOR (prior-art audit).

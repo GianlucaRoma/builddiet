@@ -29,6 +29,15 @@ class PlannerTest(unittest.TestCase):
         plan = solve(items, 10 * GB)
         self.assertEqual([i.path for i in plan.items], ["cold"])
 
+    def test_exactly_reachable_target_is_not_lost_to_rounding(self):
+        # regression: sizes are rounded down in the DP, which used to make
+        # 6000 + 4000 look short of 10000 and add a costly third item
+        items = [PlanItem("p", "/p", "a", 6000, 0.0), PlanItem("p", "/p", "b", 4000, 0.0),
+                 PlanItem("p", "/p", "c", 10240, 0.2)]
+        plan = solve(items, 10000)
+        self.assertEqual(sorted(i.path for i in plan.items), ["a", "b"])
+        self.assertEqual(plan.cost, 0.0)
+
     def test_infeasible(self):
         plan = solve([item("A", 1, 1)], 5 * GB)
         self.assertFalse(plan.feasible)

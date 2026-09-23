@@ -67,3 +67,17 @@ def shorten(text: str, limit: int = 60) -> str:
     """One line, at most ``limit`` characters."""
     text = " ".join(str(text).split())
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+_DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(s|sec|m|min|h|hr|d)?\s*$", re.IGNORECASE)
+
+
+def parse_duration(text) -> float:
+    """'90', '90s', '5m', '1.5h', '2d' -> seconds."""
+    if isinstance(text, (int, float)):
+        return float(text)
+    m = _DURATION_RE.match(str(text))
+    if not m:
+        raise ValueError(f"not a duration: {text!r}")
+    unit = (m.group(2) or "s").lower()[0]
+    return float(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]

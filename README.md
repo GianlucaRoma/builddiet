@@ -2,15 +2,48 @@
 
 **Prove what's disposable. Keep what matters.**
 
-Point BuildDiet at a project folder. It works out, by experiment and in a sandbox copy, which files and directories can be brought back byte-for-byte, what that costs, and how. Then it gives you the cheapest set to delete to free the space you asked for. It is report-only: it never deletes anything of yours.
+Point BuildDiet at your projects folder. In sandbox copies, it works out which files and directories can be brought back byte-for-byte, how, and what that costs. When the disk runs low, it frees the cheapest jointly verified set, and `restore` brings anything back.
 
 ```bash
 pip install -e .
-builddiet analyze path/to/project        # no configuration needed
-builddiet plan path/to/project --free 20GB
+builddiet watch D:/Projects          # and that's it (asks before deleting anything)
 ```
 
 > *Non indovina cosa puoi cancellare. Lo verifica.*
+
+## Automatic mode: `watch`
+
+```
+builddiet watch D:/Projects
+```
+
+`watch` finds the projects under the folder itself (git repos, `package.json`, `pyproject.toml`, `Cargo.toml`, `.sln`, `.uproject`, ...), keeps a "market" of what each one can give back, and follows the disk:
+
+| Free space | What `watch` does |
+|---|---|
+| ≥ 15% | keeps the analyses up to date; nothing else |
+| < 15% | computes and **jointly verifies** the cheapest plan that gets back to 20% free |
+| < 10% | shows it and asks, with a desktop dialog or the terminal: *Disk space is low. BuildDiet can safely reclaim 47.3 GB. Expected worst-case rebuild cost: 2m18s. Joint verification: PASS. Reclaim?* |
+| < 5% | the same, with a larger rebuild budget |
+
+With `--auto` it reclaims by itself, within the limits: `--keep-free 20`, `--max-penalty 5m`, and `--aggressive-max-penalty 1h` when the disk is critical. Sandboxes go to the local drive with the most free space, so verification still works when the watched drive is full. You can pin that location with `--sandbox-dir` or `$BUILDDIET_SANDBOX_DIR`.
+
+```
+$ builddiet market D:/Projects
+  item                              size   rebuild   value    how to get it back
+  corpus/workspace/derived/shards 1.6 MB      0.0s   LOW      your workflow
+  ml/workspace/features           1.3 MB      0.0s   LOW      copy of backups/features-2026-09-01
+  corpus/.../cache/ngrams.json    5.4 MB      0.6s   MEDIUM   your workflow
+  ml/workspace/models           327.7 KB      1.2s   HIGH     run: python scripts/train.py
+```
+
+**What gets deleted, and how to undo it.**
+* **Only jointly verified, byte-identical items:** only items of a JOINTLY VERIFIED plan are deleted, and only those that come back byte-for-byte (outputs with timestamps need `--allow-nondeterministic` in `reclaim`).
+* **Re-hashed right before deletion:** each item is hashed again just before it is deleted. If it isn't exactly what was proven, nothing in that project is deleted.
+* **Logged:** every deletion goes to `.builddiet/reclaimed.json`.
+* **Restorable:** `builddiet restore <project>` brings everything back and checks the hashes.
+
+Manual equivalents: `builddiet plan DIR --free 20GB` shows the plan, and `builddiet reclaim DIR --free 20GB` deletes it after you type `reclaim`.
 
 ## Why
 
@@ -89,19 +122,28 @@ JOINTLY VERIFIED PLAN
 
 ## Safety
 
-* **Report-only.** Nothing outside BuildDiet's own sandboxes is ever deleted.
+* **Deletion is narrow, checked and logged.**
+  * `analyze` and `plan` never delete anything of yours.
+  * `reclaim` (after you type `reclaim`) and `watch` (after you approve, or with `--auto` within your limits) delete only jointly verified, byte-identical items, each re-hashed right before deletion.
+  * Every deletion is logged, and `restore` brings it back and checks it.
 * **Sandbox.** The project is copied, and every destructive step is path-checked to stay inside the copy. Absolute paths to the project in discovered commands are rewritten to point at the sandbox.
 * **You approve the commands.** Discovered recipes are listed, and nothing runs until you say yes. Dangerous categories are refused outright.
 * **Side effects disqualify.** A recipe that changes any other existing file proves nothing. From the outside, refreshing a stale output and overwriting your data look the same. The only exception is a short, explicit list of volatile files (`*.log`, `logs/`, `__pycache__/`, `*.pyc`, tool caches).
 * **Agent logs are opt-in and local.** `--agent-logs` reads `~/.codex/sessions` and `~/.claude/projects` on your machine, keeps only commands whose working directory is inside the analyzed project, and sends nothing anywhere.
 * **The original is watched.** If anything in it changes during an analysis, the report says so.
+* **Restoring through a declared workflow runs your build** in the project. If the build also rewrites other files (e.g. refreshes a stale output), `restore` lists them. Level-0 restores (copy/extract/git) and level-1 recipes are proven to touch nothing else.
 
 Details: [docs/SAFETY.md](docs/SAFETY.md) and [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
 
 ## Options you may need
 
 ```bash
-builddiet analyze DIR --sandbox-dir E:/scratch   # the sandbox is a full copy: put it on a drive with space
+builddiet watch DIR --auto --max-penalty 10m     # reclaim by itself, within limits
+builddiet watch DIR --allow-recipes --agent-logs  # let unattended analyses use discovered recipes
+builddiet market DIR                              # what every project can give back, cheapest first
+builddiet reclaim DIR --free 20GB                 # delete a verified plan now (asks first)
+builddiet restore PROJECT [path ...]              # bring reclaimed items back, byte-checked
+builddiet analyze DIR --sandbox-dir E:/scratch   # default: the local drive with the most free space
 builddiet analyze DIR --min-size 100MB --depth 2  # candidate granularity
 builddiet analyze DIR --agent-logs                # also learn from Codex / Claude Code sessions
 builddiet analyze DIR --no-recipes                # hash proofs only; runs nothing
@@ -113,7 +155,9 @@ builddiet init DIR                                # optional: declare build + te
 
 ## Limits
 
-* **Scale.** Validated on unit tests and two small real workspaces ([BD-ZERO](docs/BD-ZERO.md), [BD-REAL](docs/BD-REAL.md)), both on Windows. It has not been validated on large workspaces yet, and every experiment needs a full copy of the project.
+* **Scale.** Validated on unit tests and small real workspaces ([BD-ZERO](docs/BD-ZERO.md), [BD-REAL](docs/BD-REAL.md), [BD-WATCH](docs/BD-WATCH.md)), all on Windows. BD-WATCH ran on a real, nearly full drive. It has not been validated on large workspaces yet, and every experiment needs a full copy of the project (on the drive with the most space).
+* **`watch` is a foreground loop.** To start it at login, register it yourself with your OS scheduler. BuildDiet does not install services.
+* **The desktop dialog** uses Windows Forms (PowerShell), `osascript` on macOS, or `zenity` on Linux. Without a desktop, `watch` asks in the terminal, or just reports.
 * **Recipes are only as good as the evidence.** If no script, doc, Makefile or log shows how something was made, BuildDiet says NOT PROVEN; it does not guess.
 * **Recipes run for real** in the sandbox. External side effects (network, databases) are not contained, although the obvious categories are refused.
 * **Rebuild time is a single measured run.** For recipes it is the full run time; for a declared workflow it is the time above a warm build.

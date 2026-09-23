@@ -13,13 +13,19 @@ from . import adapters as adapters_mod
 from . import manifest as manifest_mod
 from .config import Config, ConfigError, load_config, write_config
 from .agentlogs import default_log_dirs
-from .experiment import AnalysisError, analyze, verify_joint
+from .experiment import AnalysisError, analyze
 from .model import BUCKET_REGENERABLE, bucket, display
-from .planner import PlanSearch, collect_items, search_verified, size_first, solve
+from . import reclaim as reclaim_mod
+from .model import how
+from .planner import size_first
+from .sandbox import default_sandbox_base
+from .service import load_manifests, verified_plan
+from .watch import WatchSettings, market, value
+from .watch import run as watch_run
 from .report import render_backup, render_plan, render_report, render_scan, table
 from .sandbox import SandboxError
 from .scanner import scan
-from .units import format_size, parse_size, shorten
+from .units import format_duration, format_size, parse_duration, parse_size, shorten
 
 
 def _log(msg: str) -> None:
@@ -131,7 +137,10 @@ def _confirm_recipes(found: list, rejected: list, yes: bool) -> bool:
     if not sys.stdin.isatty():
         _log("Not run: use --yes to allow these commands in non-interactive mode.")
         return False
-    answer = input("Try them in the sandbox? [Y/n] ").strip().lower()
+    try:
+        answer = input("Try them in the sandbox? [Y/n] ").strip().lower()
+    except EOFError:
+        return False
     return answer in ("", "y", "yes", "s", "si")
 
 
@@ -159,43 +168,20 @@ def cmd_backup_plan(args) -> int:
     return 0
 
 
+def _plan(args, target: int):
+    manifests, skipped = load_manifests(args.paths, allow_stale=args.allow_stale)
+    search, items = verified_plan(
+        manifests, target,
+        sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
+        force=args.force, max_attempts=args.max_attempts, include_git=args.include_git,
+        strict=args.strict, verify=not getattr(args, "no_verify", False), log=_log,
+    )
+    return manifests, skipped, search, items
+
+
 def cmd_plan(args) -> int:
     target = parse_size(args.free)
-    manifests, skipped = [], []
-    for path in args.paths:
-        roots = manifest_mod.find(Path(path))
-        if not roots:
-            skipped.append(f"{path}: no analysis found")
-        for root in roots:
-            m = manifest_mod.load(root)
-            reasons = manifest_mod.staleness(m)
-            if reasons and not args.allow_stale:
-                skipped.append(f"{m['name']}: stale ({'; '.join(reasons)}); use --allow-stale")
-                continue
-            manifests.append(m)
-    items = collect_items(manifests, strict=args.strict, include_git=args.include_git)
-    by_root = {str(Path(m["project"])): m for m in manifests}
-
-    def verify_group(root: str, group: list):
-        m = by_root[root]
-        cfg = load_config(Path(root)) or Config(
-            regenerate=m["commands"].get("regenerate"),
-            verify=m["commands"].get("verify"),
-            hash_mode=m.get("hash_mode", "full"),
-        )
-        by_path = {e["path"]: e for e in m["entries"]}
-        return verify_joint(
-            Path(root), cfg, [by_path[i.path] for i in group],
-            total_bytes=m["total_bytes"],
-            sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
-            force=args.force,
-            log=_log,
-        )
-
-    if args.no_verify:
-        search = PlanSearch(target, solve(items, target))
-    else:
-        search = search_verified(items, target, verify_group, max_attempts=args.max_attempts)
+    _manifests, skipped, search, items = _plan(args, target)
     if args.json:
         print(json.dumps(search.to_dict(), indent=2))
     else:
@@ -207,6 +193,109 @@ def cmd_plan(args) -> int:
     if args.no_verify:
         return 0
     return 0 if search.verified else 4
+
+
+def cmd_reclaim(args) -> int:
+    target = parse_size(args.free)
+    args.no_verify = False
+    args.strict = not args.allow_nondeterministic  # by default only delete what comes back byte-for-byte
+    manifests, skipped, search, items = _plan(args, target)
+    multi = len({i.root for i in items}) > 1
+    print(render_plan(search, size_first(items, target), skipped, multi))
+    if search.verified is None:
+        print("\nNothing deleted: there is no jointly verified plan.")
+        return 3 if not search.first.feasible else 4
+    plan = search.verified.plan
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print("\nNothing deleted: pass --yes to reclaim non-interactively.")
+            return 5
+        try:
+            answer = input(f"\nDelete these {len(plan.items)} items and free {format_size(plan.freed)}? "
+                           "Type 'reclaim' to confirm: ").strip().lower()
+        except EOFError:
+            answer = ""
+        if answer != "reclaim":
+            print("Nothing deleted.")
+            return 5
+    done = reclaim_mod.reclaim(search, manifests, _log)
+    print(f"\nFreed {format_size(done.freed)} ({len(done.deleted)} items).")
+    for project, reason in done.refused:
+        print(f"  ! {project}: nothing deleted, {reason}")
+    if done.deleted:
+        print("Bring anything back with:  builddiet restore <project> [path ...]")
+    return 0 if not done.refused else 6
+
+
+def cmd_restore(args) -> int:
+    root = Path(args.path).resolve()
+    records = reclaim_mod.read_log(root)
+    if args.list or not records:
+        if not records:
+            print("Nothing has been reclaimed in this project.")
+        for r in records:
+            print(f"  {r['path']:40} {format_size(r['bytes']):>10}   deleted {r['deleted_at']}   "
+                  f"{how(r)}")
+        return 0
+    done = reclaim_mod.restore(root, args.items or None, _log)
+    for path in done.restored:
+        print(f"  restored  {path}  (byte-identical to what was deleted)")
+    for path, reason in done.failed:
+        print(f"  FAILED    {path}: {reason}")
+    if done.also_changed:
+        print("  note: your declared workflow (builddiet init) also rewrote these existing files:")
+        for rel in done.also_changed[:20]:
+            print(f"            {rel}")
+    return 0 if not done.failed else 7
+
+
+def cmd_market(args) -> int:
+    manifests, skipped = load_manifests([args.path], allow_stale=args.allow_stale)
+    items = market(manifests, include_git=args.include_git)
+    for reason in skipped:
+        _log(f"! skipped {reason}")
+    if not items:
+        print("No proven reclaimable space yet. Run `builddiet analyze` or `builddiet watch`.")
+        return 0
+    base = Path(args.path).resolve()
+
+    def label(i) -> str:
+        try:
+            rel = Path(i.root).resolve().relative_to(base).as_posix()
+        except ValueError:
+            rel = i.project
+        return i.path if rel == "." else f"{rel}/{i.path}"
+
+    rows = [[label(i), format_size(i.bytes), format_duration(i.rebuild_seconds),
+             value(i), shorten(i.how, 50)] for i in items]
+    print(table(rows, ["item", "size", "rebuild", "value", "how to get it back"], right=(1, 2)))
+    print(f"\n  {format_size(sum(i.bytes for i in items))} provably reclaimable across "
+          f"{len({i.root for i in items})} projects. LOW value = cheapest to give up.")
+    return 0
+
+
+def cmd_watch(args) -> int:
+    settings = WatchSettings(
+        prepare_below=args.prepare_below, reclaim_below=args.reclaim_below,
+        aggressive_below=args.aggressive_below, keep_free=args.keep_free,
+        max_penalty=parse_duration(args.max_penalty),
+        aggressive_max_penalty=parse_duration(args.aggressive_max_penalty),
+        auto=args.auto, allow_recipes=args.allow_recipes, agent_logs=args.agent_logs,
+        min_size=parse_size(args.min_size),
+        sandbox_dir=Path(args.sandbox_dir) if args.sandbox_dir else None,
+        dialog=not args.no_dialog, interval=parse_duration(args.interval),
+    )
+    if not (settings.aggressive_below < settings.reclaim_below < settings.prepare_below <= settings.keep_free):
+        raise ConfigError("thresholds must satisfy aggressive < reclaim < prepare <= keep-free")
+    base = Path(args.path).resolve()
+    _log(f"watching  {base}  (sandboxes: {settings.sandbox_dir or default_sandbox_base()})")
+    _log(f"          prepare < {settings.prepare_below}%, reclaim < {settings.reclaim_below}%, "
+         f"aggressive < {settings.aggressive_below}%, back to {settings.keep_free}% free")
+    _log(f"          automatic reclaim: {'ON' if settings.auto else 'off (asks first)'}; max rebuild "
+         f"{format_duration(settings.max_penalty)} ({format_duration(settings.aggressive_max_penalty)} "
+         "when critical)")
+    watch_run(base, settings, once=args.once, log=_log)
+    return 0
 
 
 def cmd_scan(args) -> int:
@@ -302,6 +391,50 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_plan)
 
+    p = sub.add_parser("reclaim", help="delete a jointly verified plan (asks first)")
+    p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
+    p.add_argument("--free", required=True, help="space to reclaim, e.g. 20GB")
+    p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
+    p.add_argument("--allow-nondeterministic", action="store_true",
+                   help="also delete workflow outputs that come back with different bytes (timestamps)")
+    p.add_argument("--include-git", action="store_true", help="also delete files restorable from git")
+    p.add_argument("--allow-stale", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--max-attempts", type=int, default=5)
+    p.add_argument("--sandbox-dir", help="where to create verification sandboxes")
+    p.add_argument("--force", action="store_true", help="skip the free-space check")
+    p.set_defaults(func=cmd_reclaim)
+
+    p = sub.add_parser("restore", help="bring back what `reclaim` deleted")
+    p.add_argument("path", nargs="?", default=".")
+    p.add_argument("items", nargs="*", help="paths to restore (default: all)")
+    p.add_argument("--list", action="store_true", help="only list what was reclaimed")
+    p.set_defaults(func=cmd_restore)
+
+    p = sub.add_parser("market", help="every provably reclaimable item under a folder, cheapest first")
+    p.add_argument("path", nargs="?", default=".")
+    p.add_argument("--include-git", action="store_true")
+    p.add_argument("--allow-stale", action="store_true")
+    p.set_defaults(func=cmd_market)
+
+    p = sub.add_parser("watch", help="watch the disk; prepare, offer or perform reclaims")
+    p.add_argument("path", nargs="?", default=".", help="folder with your projects")
+    p.add_argument("--once", action="store_true", help="run one cycle and exit")
+    p.add_argument("--interval", default="10m", help="time between cycles (default 10m)")
+    p.add_argument("--prepare-below", type=float, default=15.0, help="%% free: prepare a plan (15)")
+    p.add_argument("--reclaim-below", type=float, default=10.0, help="%% free: offer to reclaim (10)")
+    p.add_argument("--aggressive-below", type=float, default=5.0, help="%% free: bigger budget (5)")
+    p.add_argument("--keep-free", type=float, default=20.0, help="%% free to get back to (20)")
+    p.add_argument("--max-penalty", default="5m", help="max rebuild time of a reclaim (5m)")
+    p.add_argument("--aggressive-max-penalty", default="1h", help="when below --aggressive-below (1h)")
+    p.add_argument("--auto", action="store_true", help="reclaim without asking, within the limits")
+    p.add_argument("--allow-recipes", action="store_true",
+                   help="let analyses run discovered recipes (sandbox only) without asking")
+    p.add_argument("--agent-logs", action="store_true", help="also use Codex / Claude Code session logs")
+    p.add_argument("--min-size", default="100MB", help="smallest candidate (100MB)")
+    p.add_argument("--sandbox-dir", help="sandboxes (default: the local drive with most free space)")
+    p.add_argument("--no-dialog", action="store_true", help="never show a desktop dialog")
+    p.set_defaults(func=cmd_watch)
+
     p = sub.add_parser("scan", help="summarize every analyzed project under a folder")
     p.add_argument("path", nargs="?", default=".")
     p.set_defaults(func=cmd_scan)
@@ -322,7 +455,8 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ConfigError, AnalysisError, SandboxError, manifest_mod.ManifestError, ValueError) as exc:
+    except (ConfigError, AnalysisError, SandboxError, manifest_mod.ManifestError,
+            reclaim_mod.ReclaimError, ValueError) as exc:
         print(f"builddiet: error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

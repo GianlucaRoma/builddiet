@@ -131,7 +131,7 @@ def render_report(m: dict) -> str:
 
     if m.get("warnings"):
         lines += ["", RULE, "WARNINGS", RULE] + [f"  ! {w}" for w in m["warnings"]]
-    lines += ["", "Nothing was deleted. BuildDiet v0.1 is report-only."]
+    lines += ["", "Nothing was deleted. `builddiet reclaim` or `watch` delete only jointly verified items."]
     return "\n".join(lines)
 
 
@@ -215,7 +215,7 @@ def render_plan(search, naive=None, skipped=(), multi=False, verified_requested=
     # only mention it when the difference is above timing noise
     if naive is not None and naive.feasible and naive.cost - plan.cost > max(0.05, 0.05 * plan.cost):
         lines.append(f"  An unverified biggest-first choice would cost {format_duration(naive.cost)}.")
-    lines += ["", "  Nothing was deleted. Review the list, then delete it yourself."]
+    lines += ["", "  Nothing was deleted. To delete this plan: builddiet reclaim --free <SIZE> (asks first)."]
     return "\n".join(lines)
 
 

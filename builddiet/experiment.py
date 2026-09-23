@@ -23,7 +23,6 @@ import shutil
 import signal
 import subprocess
 import tarfile
-import tempfile
 import time
 import zipfile
 from dataclasses import asdict, dataclass
@@ -38,7 +37,7 @@ from .config import CONFIG_DIR, Config
 from .cost import rebuild_penalty
 from .model import IN_GIT, INCONCLUSIVE, NOT_REGENERATED, PROVEN, REQUIRED, STALE, UNTESTED
 from .planner import JointCheck
-from .sandbox import Sandbox
+from .sandbox import Sandbox, default_sandbox_base
 from .scanner import CANDIDATE, EXCLUDED, STATUS_DETAIL, scan
 from .units import format_duration, format_size, shorten
 from .verifier import (
@@ -49,6 +48,7 @@ from .verifier import (
     example,
     fingerprint,
     snapshot,
+    signature,
     snapshot_diff,
     split_differences,
 )
@@ -89,6 +89,7 @@ class Entry:
     recipe_cwd: str = ""
     recipe_origin: str = ""
     recovery: Optional[dict] = None  # level 0: how to restore it
+    signature: Optional[str] = None  # SHA-256 of the proven bytes; reclaim deletes only these
 
 
 def _kill_tree(proc: subprocess.Popen) -> None:
@@ -158,7 +159,7 @@ def _describe_failure(res: RunResult) -> str:
 
 
 def _check_space(total: int, sandbox_dir: Optional[Path], force: bool) -> None:
-    base = Path(sandbox_dir) if sandbox_dir else Path(tempfile.gettempdir())
+    base = Path(sandbox_dir) if sandbox_dir else default_sandbox_base()
     base.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(str(base)).free
     needed = int(total * 1.1) + (32 << 20)
@@ -573,6 +574,9 @@ def analyze(
                 warnings.append(f"sandbox kept at {sb.root}")
 
     _keep_notes(entries)
+    for entry in entries.values():
+        if entry.verdict in (PROVEN, IN_GIT):
+            entry.signature = signature(fingerprint(root / entry.path, "full"))
     changed = snapshot_diff(original_before, snapshot(root, skip_top=(CONFIG_DIR,)))
     if changed:
         warnings.append(
