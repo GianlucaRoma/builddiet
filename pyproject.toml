@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "builddiet"
+version = "0.1.0"
+description = "Experimentally prove which parts of a workspace are regenerable, measure what they cost to rebuild, and plan the cheapest way to reclaim disk space."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["disk-space", "build", "cache", "eviction", "developer-tools"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Filesystems",
+]
+
+[project.scripts]
+builddiet = "builddiet.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["builddiet*"]
