@@ -30,9 +30,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://gianlucaroma.github.io/builddiet/"
-Documentation = "https://github.com/GianlucaRoma/builddiet#documentation"
-Changelog = "https://github.com/GianlucaRoma/builddiet/blob/main/CHANGELOG.md"
+Homepage = "https://dietsys.github.io/builddiet/"
+Documentation = "https://github.com/dietsys/builddiet#documentation"
+Changelog = "https://github.com/dietsys/builddiet/blob/main/CHANGELOG.md"
 
 [project.scripts]
 builddiet = "builddiet.cli:main"

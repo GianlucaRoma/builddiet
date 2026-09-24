@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/GianlucaRoma/builddiet
+git clone https://github.com/dietsys/builddiet
 cd builddiet
 pip install -e .
 ```

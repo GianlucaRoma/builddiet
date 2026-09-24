@@ -1,6 +1,6 @@
 # BuildDiet
 
-[Project website](https://gianlucaroma.github.io/builddiet/) · [Source on GitHub](https://github.com/GianlucaRoma/builddiet)
+[Project website](https://dietsys.github.io/builddiet/) · [Source on GitHub](https://github.com/dietsys/builddiet)
 
 **Prove what's disposable. Keep what matters.**
 
@@ -276,7 +276,7 @@ From a source checkout or archive:
 python -m pip install .
 ```
 
-To install the current development version directly from GitHub, use `python -m pip install git+https://github.com/GianlucaRoma/builddiet.git@main`. For editable development use `python -m pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). A GitHub Release triggers the PyPI publishing workflow; until one is published, install from source or GitHub.
+To install the current development version directly from GitHub, use `python -m pip install git+https://github.com/dietsys/builddiet.git@main`. For editable development use `python -m pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). A GitHub Release triggers the PyPI publishing workflow; until one is published, install from source or GitHub.
 
 ## Documentation
 
