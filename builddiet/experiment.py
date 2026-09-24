@@ -240,6 +240,10 @@ def verify_joint(
     restored = [e for e in entries if e.get("recovery")]
     for e in restored:
         src = e["recovery"].get("source")
+        if e["recovery"].get("method") == "git" and not guard.allows_touch(root / ".git"):
+            return JointCheck(False, "the git recovery source is protected or excluded")
+        if src and not guard.allows_touch(root / src):
+            return JointCheck(False, f"the source of {e['path']} ({src}) is protected or excluded")
         if src and inside_plan(src):
             return JointCheck(False, f"{e['path']} is restored from {src}, which this plan also removes")
         if not level0.source_unchanged(root, e["recovery"]):
@@ -505,13 +509,23 @@ def _recipe_mode(root, cfg, sb, targets, entries, discovery, env, log, max_tries
         entry = entries[region.path]
         prefix = f"[{index}/{len(targets)}] {region.display} ({format_size(region.bytes)})"
         ranked = discovery.ranked_for(region.path, max_tries * 2)
-        usable = [r for r in ranked if probed(r)][:max_tries]
-        if not usable:
+        usable_count = 0
+
+        def usable_recipes():
+            nonlocal usable_count
+            for recipe in ranked:
+                if probed(recipe):
+                    usable_count += 1
+                    yield recipe
+                    if usable_count >= max_tries:
+                        return
+
+        outcome = prove_candidate(lab, region.path, originals[region.path], usable_recipes())
+        if not usable_count:
             entry.verdict = NOT_REGENERATED
             entry.detail = "no usable recipe found for it" if ranked else "no recipe found for it"
             log(f"{prefix} NOT PROVEN: {entry.detail}")
             continue
-        outcome = prove_candidate(lab, region.path, originals[region.path], usable)
         entry.verdict = {"proven": PROVEN, "stale": STALE, "inconclusive": INCONCLUSIVE}.get(
             outcome.verdict, NOT_REGENERATED)
         entry.detail = outcome.detail
@@ -640,6 +654,7 @@ def analyze(
         baseline=baseline,
         total_bytes=total,
         warnings=warnings,
+        guard=guard,
     )
     manifest["mode"] = mode
     manifest["recipes"] = recipe_report

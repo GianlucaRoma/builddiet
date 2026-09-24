@@ -87,9 +87,11 @@ def _within(rel: str, container: str) -> bool:
     return rel == container or rel.startswith(container + "/")
 
 
-def _files(path: Path) -> dict:
-    """{relative posix path: (size, absolute path)} of regular files, links skipped."""
+def _files(path: Path, reject_links: bool = False) -> Optional[dict]:
+    """Regular files by relative path; optionally reject any contained link."""
     out = {}
+    if fs.is_link(path):
+        return None if reject_links else out
     if path.is_file() and not fs.is_link(path):
         out[path.name] = (path.stat().st_size, str(path))
         return out
@@ -97,6 +99,8 @@ def _files(path: Path) -> dict:
         for name in filenames:
             full = os.path.join(dirpath, name)
             if fs.is_link(full):
+                if reject_links:
+                    return None
                 continue
             try:
                 out[os.path.relpath(full, path).replace(os.sep, "/")] = (os.path.getsize(full), full)
@@ -116,6 +120,8 @@ def _index(root: Path, guard=None) -> tuple:
             dirnames[:] = [d for d in dirnames if guard.status(os.path.join(dirpath, d)) == "clear"]
         for name in filenames:
             full = os.path.join(dirpath, name)
+            if guard is not None and guard.status(full) != "clear":
+                continue
             if fs.is_link(full):
                 continue
             try:
@@ -140,11 +146,12 @@ def source_unchanged(root: Path, recovery: dict) -> bool:
         return _git(Path(root), "rev-parse", "--verify", "HEAD") is not None
     src = Path(root) / recovery["source"]
     try:
+        if fs.is_link(src):
+            return False
         if src.is_dir():
             return _dir_signature(_files(src), Hasher()) == recovery.get("signature")
-        if _stat(str(src)) == recovery.get("source_stat"):
-            return True
-        return method == DUPLICATE and Hasher().file(str(src)) == recovery.get("signature")
+        # Size and mtime can stay unchanged when the bytes change.
+        return bool(recovery.get("signature")) and Hasher().file(str(src)) == recovery["signature"]
     except OSError:
         return False
 
@@ -277,7 +284,8 @@ def _find_archive(root: Path, rel: str, files: dict, archives: list, hasher: Has
                     ARCHIVE, archive_rel,
                     f"{'member' if single_file else 'contents'} of {where}",
                     seconds=seconds, estimated=False, prefix=prefix,
-                    source_stat=_stat(archive), single_file=single_file,
+                    source_stat=_stat(archive), signature=hasher.file(archive),
+                    single_file=single_file,
                 )
     return None
 
@@ -416,11 +424,15 @@ def find_recoverable(root: Path, regions: list, log: Callable[[str], None] = lam
         return {}
     hasher = Hasher()
     by_size, archives = _index(root, guard)
-    clean = _git_clean_files(root) if (root / ".git").exists() else None
+    git_dir = root / ".git"
+    clean = _git_clean_files(root) if (guard is None or guard.allows_touch(git_dir)) \
+        and git_dir.exists() else None
     member_cache: dict = {}
     found: dict = {}
     for region in sorted(targets, key=lambda r: r.path):
-        files = _files(root / region.path)
+        files = _files(root / region.path, reject_links=True)
+        if files is None:
+            continue
         recovery = (
             _find_duplicate(root, region.path, files, by_size, hasher, set(found), guard)
             or (_find_git(root, region.path, files, clean, hasher) if clean else None)

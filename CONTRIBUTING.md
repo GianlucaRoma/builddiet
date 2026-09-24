@@ -25,6 +25,7 @@ A change to what BuildDiet proves or deletes must keep the gates green:
 * [BD-ZERO](docs/BD-ZERO.md): `benchmarks/bd_zero/`.
 * [BD-REAL](docs/BD-REAL.md): `benchmarks/bd_real/`.
 * [BD-WATCH](docs/BD-WATCH.md).
+* [macOS validation](docs/MAC-VALIDATION.md): both functional gates, multiple Python versions, package installation and restore.
 
 Each gate document says how to reproduce it. Run the gates on scratch folders, never on your own projects.
 

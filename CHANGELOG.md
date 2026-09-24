@@ -4,6 +4,16 @@
 
 First public version.
 
+* macOS validation: BD-ZERO and BD-REAL each matched 12/12 expected verdicts; a four-item reclaim restored all 70 original files byte-for-byte. See [docs/MAC-VALIDATION.md](docs/MAC-VALIDATION.md).
+* Metadata-only identity checks are no longer accepted as byte-identical proofs. Nondeterministic workflow restores now require every original file path and type to return; a merely nonempty output is insufficient.
+* Recipe probes run progressively and stop when a candidate is already proven. The CLI output now distinguishes sandbox joint checks from the content-checked shortcut for copy/archive/git-only plans.
+* Reclaim records are flushed to disk before removal, and a newly protected restore log prevents deletion.
+* Sandbox and reclaim paths now reject linked parent directories, including links introduced after analysis that could redirect a nested item outside its root.
+
+* Recheck duplicate and archive recovery sources by content before reclaiming, including when size and modification time are unchanged. Previously, an archive with unchanged metadata could pass the quick source check.
+* Keep individually protected files out of sandbox copies, duplicate indexes, recipe discovery and manifest input hashes. Directories containing links are not given a level-0 proof because that restore method cannot recreate those links.
+* Recognize both canonical and non-canonical project paths in discovered commands (for example `/var` and `/private/var` on macOS).
+
 * `builddiet analyze DIR` works with **no configuration**:
   * **Level 0** proves by SHA-256 that bytes exist elsewhere: identical copies, `.zip`/`.tar*` archives (members decompressed), git (`cat-file --filters`). Files tracked in git are reported as IN GIT and are not planned unless you pass `--include-git`.
   * **Level 1** discovers recipes from scripts, Makefiles, lockfiles, README/AGENTS.md/CI and, opt-in, Codex / Claude Code session logs. It shows them for approval, refuses dangerous commands, and proves a candidate only if a recipe recreates it byte-for-byte without changing any other existing file.

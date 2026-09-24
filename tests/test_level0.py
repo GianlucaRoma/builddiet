@@ -60,6 +60,15 @@ class Level0Test(unittest.TestCase):
         self.assertNotIn("a", found)
         self.assertNotIn("b", found)
 
+    def test_directory_with_link_is_not_proven_recoverable(self):
+        for name in ("a", "b"):
+            write(self.root / name / "w.bin", b"w" * 3000)
+        try:
+            os.symlink(self.root / "b" / "w.bin", self.root / "a" / "linked.bin")
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks are not available")
+        self.assertNotIn("a", self.find())
+
     def test_zip_with_top_level_folder(self):
         write(self.root / "assets" / "tex" / "wall.png", os.urandom(4000))
         write(self.root / "assets" / "readme.txt", b"hello")
@@ -108,6 +117,29 @@ class Level0Test(unittest.TestCase):
         rec = self.find()["a.bin"].to_dict()
         self.assertTrue(level0.source_unchanged(self.root, rec))
         write(self.root / "b.bin", os.urandom(3000))
+        self.assertFalse(level0.source_unchanged(self.root, rec))
+
+    def test_same_size_and_mtime_source_change_is_detected(self):
+        write(self.root / "a.bin", b"A" * 3000)
+        write(self.root / "b.bin", b"A" * 3000)
+        rec = self.find()["a.bin"].to_dict()
+        source = self.root / "b.bin"
+        old = source.stat()
+        write(source, b"B" * 3000)
+        os.utime(source, ns=(old.st_atime_ns, old.st_mtime_ns))
+        self.assertFalse(level0.source_unchanged(self.root, rec))
+
+    def test_same_size_and_mtime_archive_change_is_detected(self):
+        write(self.root / "out" / "x.bin", b"A" * 3000)
+        archive = self.root / "out.zip"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("x.bin", b"A" * 3000)
+        rec = self.find()["out"].to_dict()
+        old = archive.stat()
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("x.bin", b"B" * 3000)
+        self.assertEqual(archive.stat().st_size, old.st_size)
+        os.utime(archive, ns=(old.st_atime_ns, old.st_mtime_ns))
         self.assertFalse(level0.source_unchanged(self.root, rec))
 
 

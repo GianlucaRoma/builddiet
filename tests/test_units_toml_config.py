@@ -74,6 +74,9 @@ a.b = 1
 
 
 class ConfigTest(unittest.TestCase):
+    def test_metadata_only_hash_cannot_prove_byte_identity(self):
+        with self.assertRaises(ConfigError):
+            Config(hash_mode="meta").validate(require_workflow=False)
     def test_normalize_rel(self):
         self.assertEqual(normalize_rel(".\\a\\b\\"), "a/b")
         for bad in ("../x", "/etc", "C:\\x", ".", "a/../../b"):

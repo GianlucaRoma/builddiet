@@ -1,17 +1,44 @@
 # BuildDiet
 
+[Project website](https://gianlucaroma.github.io/builddiet/) · [Source on GitHub](https://github.com/GianlucaRoma/builddiet)
+
 **Prove what's disposable. Keep what matters.**
 
-You don't tell BuildDiet how much to delete. Point it at your projects folder: it finds out, by experiment in sandbox copies, what can be brought back byte-for-byte, how, and at what measured cost. Then it offers three verified options.
+**Beta:** start with `analyze` and a manual `reclaim` on a backed-up project. Automatic reclaim is opt-in.
+
+BuildDiet is a command-line tool for developer workspaces that are running out of disk space. It looks for large outputs, checks whether each one can be restored, measures how long that takes, and offers a reviewed list of items to remove. It leaves anything it cannot prove alone.
+
+For example, in the [BD-ZERO sample project](docs/BD-ZERO.md), it finds a copy of `features/` in `backups/`, rebuilds `models/` from a project script, and restores `release/` from a zip. It leaves `data/` alone because no tested recovery can bring its original bytes back. On macOS, the sample analysis proved 2.3 MB reclaimable; after reclaim and restore, all 70 project files matched their original SHA-256 hashes.
+
+**Who is it for?** Developers, data scientists and teams with build artifacts, generated datasets or model outputs mixed with source data. It is useful when you do not know which large folders are safe to delete or how expensive they are to rebuild. If you already know you want to discard all ignored build files, `git clean` is simpler. For photos and ordinary duplicate files, use a duplicate finder.
+
+**Scope:** BuildDiet can analyze several projects in a folder on one disk, but it is not a whole-disk cleaner. It discovers projects only a few folders deep and leaves unrelated files alone. Point it at a specific project or a folder containing projects.
+
+BuildDiet discovers possible recovery methods from identical copies, archives, Git, scripts and project workflows. Commands are tried in a temporary project copy; their effects are checked before an item is offered. A discovered script is still a real program and can have effects outside that copy, so review it before approving a run.
+
+From the source directory on macOS:
 
 ```bash
-pip install git+https://github.com/GianlucaRoma/builddiet
-builddiet analyze D:/Projects        # finds the projects, proves what it can, shows the options
-builddiet reclaim D:/Projects        # choose LEGGERO / NORMALE / ESTREMO, confirm, done
-builddiet restore D:/Projects/app    # anything back, byte-checked
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+.venv/bin/builddiet analyze ~/Projects   # inspect projects and proposed savings
+.venv/bin/builddiet reclaim ~/Projects   # choose an option and confirm
+.venv/bin/builddiet restore ~/Projects/app
 ```
 
+On Windows, install into a virtual environment and use `Scripts\builddiet.exe`; the examples below use `D:/Projects` as a sample workspace path. `restore` targets the individual project that was reclaimed.
+
 > *Non indovina cosa puoi cancellare. Lo verifica.*
+
+## How it differs from other tools
+
+| Tool | What it decides from | Where BuildDiet adds value |
+|---|---|---|
+| [`git clean`](https://git-scm.com/docs/git-clean) | Whether files are untracked or ignored | Tests whether the *current bytes* can be recovered, and measures the rebuild cost. |
+| [Czkawka](https://github.com/qarmin/czkawka) and other duplicate finders | Matching copies of files | Also tests outputs recreated by a script or workflow, even without a duplicate. |
+| [Nix garbage collection](https://releases.nixos.org/nix/nix-2.26.3/manual/command-ref/nix-store/gc.html) and workflow managers | References or outputs their system already knows | Examines an existing project without requiring its files to have been created by BuildDiet. |
+
+The techniques individually have prior art. BuildDiet's useful combination is recovery testing on an existing workspace, measured rebuild time, and a checked plan for reclaiming space. See the [prior-art audit](docs/BD-PRIOR.md) for the narrower research claim.
 
 ## Three options, computed for you
 
@@ -56,7 +83,7 @@ The options are nested (LEGGERO ⊆ NORMALE ⊆ ESTREMO). Each option shows:
 * the space it frees;
 * the measured rebuild time;
 * how many items it contains, and of which kind (copies, archives, recipes, workflow);
-* whether its **joint verification** passed: all of its items are removed together in a sandbox and must come back byte-for-byte;
+* whether its **joint verification** passed: recipe and workflow items are removed together in a sandbox and must come back byte-for-byte; options containing only copy/archive/git proofs use checked source hashes and dependency checks without making a full sandbox copy;
 * which protected or excluded paths were left out.
 
 If an option fails its joint verification, it is retried without one item at a time, and the items left out are listed. Only items that come back byte-for-byte are ever offered.
@@ -124,7 +151,7 @@ You don't tell BuildDiet which commands you use. It looks for evidence itself an
 
 Level 1 needs no test command, because the bar is higher than "tests pass": after regeneration the project is byte-for-byte what it was.
 
-Before anything runs, BuildDiet shows you the recipes it found and asks once (`--yes` skips the question). Commands that push, publish, install, delete, touch the network, or use paths outside the project are **never** run:
+Before anything runs, BuildDiet shows you the recipes it found and asks once (`--yes` skips the question). It rejects command lines containing recognizable push, publish, install, delete, network and outside-path operations. It cannot determine everything a script will do internally:
 
 ```
 Found 5 possible recipes. They run ONLY inside a sandbox copy;
@@ -209,7 +236,7 @@ builddiet init DIR                                # optional: declare build + te
 
 ## Limits
 
-* **Scale.** Validated on unit tests and small real workspaces ([BD-ZERO](docs/BD-ZERO.md), [BD-REAL](docs/BD-REAL.md), [BD-WATCH](docs/BD-WATCH.md)), all on Windows. BD-WATCH ran on a real, nearly full drive. It has not been validated on large workspaces yet, and every experiment needs a full copy of the project (on the drive with the most space).
+* **Scale.** Validated on small representative workspaces on Windows and macOS ([BD-ZERO](docs/BD-ZERO.md), [BD-REAL](docs/BD-REAL.md), [BD-WATCH](docs/BD-WATCH.md), [macOS validation](docs/MAC-VALIDATION.md)). A 201 MB synthetic duplicate workspace also passed on macOS. Multi-GB projects and trees with very many small files are not yet validated. Recipe and workflow experiments need a full copy of the project on a drive with enough space.
 * **`watch` is a foreground loop.** To start it at login, register it yourself with your OS scheduler. BuildDiet does not install services.
 * **The desktop dialog** uses Windows Forms (PowerShell), `osascript` on macOS, or `zenity` on Linux. Without a desktop, `watch` asks in the terminal, or just reports.
 * **Recipes are only as good as the evidence.** If no script, doc, Makefile or log shows how something was made, BuildDiet says NOT PROVEN; it does not guess.
@@ -243,12 +270,13 @@ docs/             SAFETY, EXPERIMENT_MODEL, THREAT_MODEL, TEST-ISOLATION, BD-ZER
 
 ## Install
 
+From a source checkout or archive:
+
 ```bash
-pip install git+https://github.com/GianlucaRoma/builddiet        # latest main, no clone needed
-pip install git+https://github.com/GianlucaRoma/builddiet@v0.1.0 # a fixed release
+python -m pip install .
 ```
 
-From a clone: `pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). The package is not on PyPI yet.
+After the repository and its `v0.1.0` tag are public at the URLs in `pyproject.toml`, users can also install with `python -m pip install git+https://github.com/GianlucaRoma/builddiet@v0.1.0`. For development use `python -m pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). The package is not on PyPI yet.
 
 ## Documentation
 
@@ -262,11 +290,13 @@ From a clone: `pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). The p
 | [BD-WATCH](docs/BD-WATCH.md) | release gate: automatic mode on a real, nearly full disk |
 | [BD-PRIOR](docs/BD-PRIOR.md) | prior-art audit: how existing tools compare |
 | [TEST-ISOLATION](docs/TEST-ISOLATION.md) | how the tests are isolated, and the out-of-space investigation |
+| [MAC-VALIDATION](docs/MAC-VALIDATION.md) | macOS tests, packaging and limits |
+| [PUBLISHING](docs/PUBLISHING.md) | how to upload the changes and enable GitHub Pages |
 | [CHANGELOG](CHANGELOG.md) | changes by version |
 
 ## Requirements
 
-Python 3.9+ with no dependencies. `git` is optional (used for the IN GIT proofs). Tested on Windows 10 with Python 3.10.
+Python 3.9+ with no runtime dependencies. `git` is optional (used for the IN GIT proofs). Tested on Windows 10 with Python 3.10 and on macOS with Python 3.9, 3.12 and 3.14.
 
 ## License
 

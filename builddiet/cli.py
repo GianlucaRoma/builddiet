@@ -81,8 +81,6 @@ def _effective_config(args, root: Path = None) -> Config:
         cfg.regenerate = args.regenerate or None
     if args.verify is not None:
         cfg.verify = args.verify or None
-    if args.hash:
-        cfg.hash_mode = args.hash
     if args.timeout:
         cfg.timeout = args.timeout
     if args.min_size:
@@ -476,13 +474,13 @@ def cmd_scan(args) -> int:
     loaded = []
     for root in roots:
         m = manifest_mod.load(root)
-        loaded.append((m, bool(manifest_mod.staleness(m))))
+        loaded.append((m, bool(manifest_mod.staleness(m, guard))))
     analyzed = {Path(m["project"]).resolve() for m, _ in loaded}
     unanalyzed = []
     try:
         for entry in sorted(os.scandir(base), key=lambda e: e.name):
-            if not entry.is_dir(follow_symlinks=False) or entry.name.startswith(".") \
-                    or guard.status(entry.path) != "clear":
+            if guard.status(entry.path) != "clear" or not entry.is_dir(follow_symlinks=False) \
+                    or entry.name.startswith("."):
                 continue
             child = Path(entry.path).resolve()
             if not any(a == child or child in a.parents or a in child.parents for a in analyzed):
@@ -539,7 +537,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include", action="append", help="extra directory to test (repeatable)")
     p.add_argument("--only", action="append", help="experiment only on this candidate (repeatable)")
     p.add_argument("--min-size", help="override candidates.min_size")
-    p.add_argument("--hash", choices=("full", "meta"), help="identity check strength")
     p.add_argument("--timeout", type=int, help="seconds allowed per workflow or recipe run")
     p.add_argument("--sandbox-dir", help="where to create the sandbox (outside the project)")
     p.add_argument("--keep-sandbox", action="store_true", help="keep the sandbox and logs")

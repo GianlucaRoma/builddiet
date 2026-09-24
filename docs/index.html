@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="BuildDiet checks what a developer project can recover before offering to reclaim disk space.">
+  <title>BuildDiet — Know what can come back</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <style>
+    :root { color-scheme: dark; --bg:#0b1118; --panel:#121c26; --panel2:#172430; --line:#294051; --text:#eef4f2; --muted:#abc0c1; --lime:#d4ff70; --cyan:#77d9dd; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--bg); color:var(--text); font:1rem/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    a { color:inherit; text-underline-offset:.2em; }
+    a:focus-visible, button:focus-visible { outline:3px solid var(--lime); outline-offset:4px; }
+    .wrap { width:min(1120px,calc(100% - 2.5rem)); margin:auto; }
+    header { border-bottom:1px solid var(--line); }
+    .nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; min-height:4.5rem; }
+    .brand { display:inline-flex; align-items:center; gap:.65rem; font-weight:800; font-size:1.08rem; text-decoration:none; letter-spacing:-.025em; }
+    .brand-mark { display:inline-grid; place-items:center; width:2rem; height:2rem; border:2px solid var(--lime); border-radius:.45rem; color:var(--lime); font-size:1.15rem; line-height:1; }
+    nav { display:flex; gap:1.25rem; align-items:center; }
+    nav a { text-decoration:none; color:var(--muted); font-size:.94rem; }
+    nav a:hover { color:var(--text); }
+    .hero { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(300px,.9fr); gap:clamp(2rem,6vw,5rem); align-items:center; padding:clamp(4rem,8vw,7.5rem) 0; }
+    .eyebrow { color:var(--lime); text-transform:uppercase; letter-spacing:.14em; font-weight:750; font-size:.78rem; margin:0 0 1.15rem; }
+    h1,h2,h3,p { margin-top:0; }
+    h1 { max-width:11ch; font-size:clamp(3.15rem,7vw,6.25rem); line-height:1.02; letter-spacing:-.065em; margin-bottom:1.5rem; }
+    h1 em { color:var(--lime); font-style:normal; }
+    .lead { max-width:37rem; color:var(--muted); font-size:clamp(1.1rem,1.8vw,1.3rem); line-height:1.55; }
+    .actions { display:flex; flex-wrap:wrap; gap:.8rem; margin-top:2rem; }
+    .button { display:inline-block; padding:.78rem 1.1rem; border:1px solid var(--lime); border-radius:.45rem; text-decoration:none; font-weight:700; }
+    .button.primary { background:var(--lime); color:#0b1118; }
+    .button.secondary { color:var(--lime); }
+    .button:hover { transform:translateY(-1px); }
+    .terminal { border:1px solid var(--line); background:var(--panel); box-shadow:0 22px 70px #0005; border-radius:.75rem; overflow:hidden; min-width:0; }
+    .terminal-top { display:flex; align-items:center; gap:.45rem; padding:.8rem 1rem; border-bottom:1px solid var(--line); color:var(--muted); font: .8rem ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .dot { width:.55rem; height:.55rem; border-radius:50%; background:#567080; }
+    .terminal-top span:last-child { margin-left:auto; }
+    pre { margin:0; padding:1.4rem; overflow:auto; color:#d9e7e5; font:.9rem/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .prompt { color:var(--cyan); } .good { color:var(--lime); } .dim { color:#91a7aa; }
+    .rule { border-top:1px solid var(--line); }
+    section { padding:clamp(3.6rem,7vw,6rem) 0; }
+    h2 { font-size:clamp(2rem,4vw,3.25rem); line-height:1.13; letter-spacing:-.045em; max-width:17ch; margin-bottom:1rem; }
+    .section-intro { max-width:43rem; color:var(--muted); font-size:1.08rem; margin-bottom:2rem; }
+    .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:.65rem; padding:1.5rem; }
+    .number { color:var(--lime); font:700 .85rem ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .card h3 { font-size:1.25rem; line-height:1.25; margin:.9rem 0 .6rem; }
+    .card p { color:var(--muted); margin:0; }
+    .proof { display:grid; grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr); gap:2.5rem; align-items:start; }
+    .proof p { color:var(--muted); }
+    .ledger { border:1px solid var(--line); border-radius:.65rem; overflow:hidden; background:var(--panel); }
+    .ledger-row { display:grid; grid-template-columns:minmax(6rem,1fr) minmax(0,2fr); gap:.8rem; padding:1rem 1.2rem; border-bottom:1px solid var(--line); }
+    .ledger-row:last-child { border-bottom:0; }
+    .ledger code { color:var(--text); font-size:.9rem; }
+    .ledger span { color:var(--muted); }
+    .ledger .kept { color:var(--lime); }
+    .metric { margin-top:1.6rem; padding:1rem 1.2rem; border-left:3px solid var(--lime); background:var(--panel2); }
+    .metric strong { color:var(--lime); }
+    .note { border:1px solid var(--line); border-radius:.65rem; padding:1.5rem; background:var(--panel); max-width:54rem; }
+    .note strong { color:var(--lime); }
+    .note p { color:var(--muted); margin:.55rem 0 0; }
+    .start { background:var(--panel); border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .start .wrap { display:grid; grid-template-columns:1fr 1fr; gap:2rem; align-items:start; }
+    .start pre { background:#0b1118; border:1px solid var(--line); border-radius:.6rem; font-size:.85rem; }
+    .small { color:var(--muted); font-size:.92rem; }
+    footer { padding:2.5rem 0; color:var(--muted); font-size:.9rem; }
+    footer .wrap { display:flex; flex-wrap:wrap; justify-content:space-between; gap:1rem; }
+    footer a { color:var(--text); }
+    @media (max-width:800px) { .hero,.proof,.start .wrap { grid-template-columns:1fr; } .hero { padding:4rem 0; } .grid { grid-template-columns:1fr; } h1 { max-width:13ch; } }
+    @media (max-width:520px) { .wrap { width:min(100% - 1.5rem,1120px); } nav a:first-child { display:none; } .hero { gap:2rem; } pre { font-size:.76rem; } .ledger-row { grid-template-columns:1fr; gap:.15rem; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } .button:hover { transform:none; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">B</span> BuildDiet</a>
+      <nav aria-label="Main navigation">
+        <a href="#how">How it works</a>
+        <a href="#limits">Limits</a>
+        <a href="https://github.com/GianlucaRoma/builddiet">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+  <main id="top">
+    <div class="wrap hero">
+      <div>
+        <p class="eyebrow">Open-source developer tool · Beta</p>
+        <h1>Know what can <em>come back.</em></h1>
+        <p class="lead">BuildDiet checks which files in your projects can be recovered before suggesting what to remove. It measures the space you gain and the time it would take to restore those files.</p>
+        <div class="actions">
+          <a class="button primary" href="#start">Try it on a project</a>
+          <a class="button secondary" href="https://github.com/GianlucaRoma/builddiet">Read the source ↗</a>
+        </div>
+      </div>
+      <div class="terminal" aria-label="Example BuildDiet report">
+        <div class="terminal-top"><i class="dot"></i><i class="dot"></i><i class="dot"></i><span>project analysis</span></div>
+        <pre><span class="prompt">$</span> builddiet analyze ~/Projects/app
+
+OPTION     SPACE    REBUILD   CHECK
+LEGGERO    1.9 MB   0.2s      <span class="good">PASS</span>
+NORMALE    2.3 MB   1.5s      <span class="good">PASS</span>
+ESTREMO    2.3 MB   1.5s      <span class="good">PASS</span>
+
+<span class="good">recoverable</span>  features/  identical copy
+<span class="good">recoverable</span>  release/   archive
+<span class="good">recoverable</span>  models/    rebuild script
+<span class="dim">keep</span>         data/      no proven recovery</pre>
+      </div>
+    </div>
+
+    <div class="rule"><section class="wrap" id="how">
+      <p class="eyebrow">The workflow</p>
+      <h2>A deletion plan backed by a recovery test.</h2>
+      <p class="section-intro">Built for projects where generated outputs, copies and irreplaceable inputs sit side by side.</p>
+      <div class="grid">
+        <div class="card"><span class="number">01 / Analyze</span><h3>Find candidates</h3><p>Inspect projects inside a folder and identify large files or directories worth checking.</p></div>
+        <div class="card"><span class="number">02 / Prove</span><h3>Test recovery</h3><p>Check an identical copy, archive, Git source or rebuild command. Keep anything whose original bytes cannot be recovered.</p></div>
+        <div class="card"><span class="number">03 / Choose</span><h3>Review the trade-off</h3><p>See space saved and measured rebuild time. Reclaim manually, then restore a project if you need its files again.</p></div>
+      </div>
+    </section></div>
+
+    <div class="rule"><section class="wrap proof" id="example">
+      <div>
+        <p class="eyebrow">A concrete example</p>
+        <h2>Different folders, different answers.</h2>
+        <p>In the small BD-ZERO sample project, BuildDiet found several recovery paths and left the original data untouched.</p>
+        <div class="metric"><strong>2.3 MB</strong> reclaimed in the sample. After restore, all <strong>70 project files</strong> matched their original SHA-256 hashes.</div>
+        <p class="small">This is a test fixture, not a claim about how much space your projects will save. <a href="https://github.com/GianlucaRoma/builddiet/blob/main/docs/MAC-VALIDATION.md">See the validation notes</a>.</p>
+      </div>
+      <div class="ledger" aria-label="Recovery decisions in the sample project">
+        <div class="ledger-row"><code>features/</code><span>Recoverable from an identical copy</span></div>
+        <div class="ledger-row"><code>release/</code><span>Recoverable from an archive</span></div>
+        <div class="ledger-row"><code>models/</code><span>Rebuilt and checked byte for byte</span></div>
+        <div class="ledger-row"><code>data/</code><span class="kept">Kept: no proven recovery</span></div>
+      </div>
+    </section></div>
+
+    <div class="rule"><section class="wrap" id="limits">
+      <p class="eyebrow">Use it with eyes open</p>
+      <h2>A project tool, not a whole-disk cleaner.</h2>
+      <div class="note"><strong>Beta guidance</strong><p>Start with analysis and manual reclaim on a backed-up project. BuildDiet does not inventory or safely clean every kind of file on a disk. Rebuild scripts run as real programs during testing and can affect services outside the test copy; review them before approval. Multi-gigabyte workspaces and trees with very many small files are not yet validated.</p></div>
+    </section></div>
+
+    <section class="start" id="start"><div class="wrap">
+      <div>
+        <p class="eyebrow">Get started</p>
+        <h2>Try analysis first.</h2>
+        <p class="section-intro">Clone the repository, install it in a virtual environment, then point BuildDiet at a project folder. Read the proposed options before reclaiming anything.</p>
+        <div class="actions"><a class="button primary" href="https://github.com/GianlucaRoma/builddiet#readme">Setup and documentation ↗</a></div>
+      </div>
+      <pre><span class="prompt">$</span> git clone https://github.com/GianlucaRoma/builddiet.git
+<span class="prompt">$</span> cd builddiet
+<span class="prompt">$</span> python3 -m venv .venv
+<span class="prompt">$</span> .venv/bin/python -m pip install .
+<span class="prompt">$</span> .venv/bin/builddiet analyze ~/Projects/app</pre>
+    </div></section>
+  </main>
+  <footer><div class="wrap"><span>BuildDiet · MIT licensed · Beta</span><span><a href="https://github.com/GianlucaRoma/builddiet">Source</a> · <a href="https://github.com/GianlucaRoma/builddiet/issues">Issues</a> · <a href="https://github.com/GianlucaRoma/builddiet/blob/main/docs/SAFETY.md">Safety notes</a></span></div></footer>
+</body>
+</html>

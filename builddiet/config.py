@@ -15,7 +15,7 @@ CONFIG_DIR = ".builddiet"
 CONFIG_FILE = "config.toml"
 MANIFEST_FILE = "manifest.json"
 
-HASH_MODES = ("full", "meta")
+HASH_MODES = ("full",)
 
 
 class ConfigError(ValueError):
@@ -152,7 +152,7 @@ def render_config(cfg: Config) -> str:
         f"min_size = {q(format_size(cfg.min_size).replace(' ', ''))}",
         "",
         "[identity]",
-        "# full: SHA-256 of every file. meta: paths and sizes only (faster, weaker).",
+        "# SHA-256 of every file is required for a byte-identical proof.",
         f"hash = {q(cfg.hash_mode)}",
         "",
         "# Optional: probability (0..1) that a directory will be needed again soon.",

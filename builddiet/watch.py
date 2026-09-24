@@ -95,7 +95,7 @@ def refresh_market(root: Path, s: WatchSettings, log: Callable[[str], None], gua
     for ws in workspaces.discover(root, guard=guard):
         try:
             current = manifest_mod.load(ws)
-            if not manifest_mod.staleness(current):
+            if not manifest_mod.staleness(current, guard):
                 continue
         except manifest_mod.ManifestError:
             pass

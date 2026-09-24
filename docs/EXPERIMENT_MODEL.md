@@ -99,7 +99,7 @@ If the check fails, each failing item is excluded in turn and the knapsack is so
 * **Recipes run for real in the sandbox.** Only the listed dangerous categories are refused. External effects of the rest (for example a script that calls an API) are not contained.
 * **Interactions between recipes.** A recipe that needs another candidate's output fails when that output is removed. In a plan, recipes are run in two passes, and the joint check decides.
 * **Partial plans.** A verified plan is verified as a whole: deleting only part of it is covered by the individual proofs only.
-* **`hash = "meta"`** compares sizes only (level 2 only); level 0 and level 1 always hash.
+* All proof levels compare SHA-256 content hashes. The former `hash = "meta"` setting compared only paths and sizes, so it can no longer be used for a byte-identical proof.
 * **Full copies.** Each analysis, and each joint check that runs anything, copies the whole project.
 * **Timing.** Costs come from a single measured run.
 

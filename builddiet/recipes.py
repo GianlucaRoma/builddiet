@@ -139,8 +139,9 @@ def looks_like_build(command: str) -> bool:
 
 def relativize(command: str, root: Path) -> str:
     """Replace the project's absolute path with {project}, in any slash style."""
-    root_str = str(Path(root).resolve())
-    variants = {root_str, root_str.replace("\\", "/"), root_str.replace("/", "\\")}
+    roots = {str(Path(root).absolute()), str(Path(root).resolve())}
+    variants = {style for value in roots
+                for style in (value, value.replace("\\", "/"), value.replace("/", "\\"))}
     out = command
     for v in sorted(variants, key=len, reverse=True):
         out = re.sub(re.escape(v), lambda _m: ROOT_TOKEN, out, flags=re.IGNORECASE)
@@ -185,7 +186,7 @@ def _latest_mtime(path: Path) -> float:
     return latest
 
 
-def _walk_text_files(root: Path, suffixes: tuple, skip: set):
+def _walk_text_files(root: Path, suffixes: tuple, skip: set, guard=None):
     for dirpath, dirnames, filenames in fs.walk(root):
         rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
         rel_dir = "" if rel_dir == "." else rel_dir
@@ -193,10 +194,13 @@ def _walk_text_files(root: Path, suffixes: tuple, skip: set):
             d for d in dirnames
             if d not in METADATA_DIRS and d not in ("node_modules", "__pycache__", ".venv", "venv")
             and f"{rel_dir}/{d}".lstrip("/") not in skip
+            and (guard is None or guard.status(os.path.join(dirpath, d)) == "clear")
         ]
         for name in filenames:
             if name.lower().endswith(suffixes) and f"{rel_dir}/{name}".lstrip("/") not in skip:
                 full = os.path.join(dirpath, name)
+                if guard is not None and guard.status(full) != "clear":
+                    continue
                 try:
                     if os.path.getsize(full) <= _MAX_SCRIPT_BYTES:
                         yield f"{rel_dir}/{name}".lstrip("/"), full
@@ -204,10 +208,10 @@ def _walk_text_files(root: Path, suffixes: tuple, skip: set):
                     pass
 
 
-def _from_scripts(root: Path, candidates: list, excluded: set) -> list:
+def _from_scripts(root: Path, candidates: list, excluded: set, guard=None) -> list:
     recipes = []
     patterns = {c: _name_pattern(c.rsplit("/", 1)[-1]) for c in candidates}
-    for rel, full in _walk_text_files(root, tuple(SCRIPT_RUNNERS), excluded):
+    for rel, full in _walk_text_files(root, tuple(SCRIPT_RUNNERS), excluded, guard):
         try:
             with open(full, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
@@ -222,9 +226,9 @@ def _from_scripts(root: Path, candidates: list, excluded: set) -> list:
     return recipes
 
 
-def _from_makefile(root: Path, candidates: list, skip: set = frozenset()) -> list:
+def _from_makefile(root: Path, candidates: list, skip: set = frozenset(), guard=None) -> list:
     makefile = root / "Makefile"
-    if "Makefile" in skip or not makefile.is_file():
+    if "Makefile" in skip or (guard is not None and guard.status(makefile) != "clear") or not makefile.is_file():
         return []
     text = makefile.read_text(encoding="utf-8", errors="replace")
     targets = {m.group(1) for m in re.finditer(r"^([A-Za-z0-9_./-]+)\s*:(?!=)", text, re.MULTILINE)}
@@ -238,11 +242,11 @@ def _from_makefile(root: Path, candidates: list, skip: set = frozenset()) -> lis
     return recipes
 
 
-def _from_ecosystem(root: Path, candidates: list, skip: set = frozenset()) -> list:
+def _from_ecosystem(root: Path, candidates: list, skip: set = frozenset(), guard=None) -> list:
     recipes = []
     names = {c: c.rsplit("/", 1)[-1] for c in candidates}
     package = root / "package.json"
-    if "package.json" not in skip and package.is_file():
+    if "package.json" not in skip and (guard is None or guard.status(package) == "clear") and package.is_file():
         for c, n in names.items():
             if n == "node_modules" and c == "node_modules":
                 if (root / "package-lock.json").exists():
@@ -257,10 +261,10 @@ def _from_ecosystem(root: Path, candidates: list, skip: set = frozenset()) -> li
             scripts = {}
         if "build" in scripts:
             recipes.append(Recipe("npm run build", "package.json script 'build'", 2))
-    if (root / "Cargo.toml").is_file():
+    if "Cargo.toml" not in skip and (guard is None or guard.status(root / "Cargo.toml") == "clear") and (root / "Cargo.toml").is_file():
         linked = {c for c, n in names.items() if c == "target"}
         recipes.append(Recipe("cargo build", "Cargo.toml", 4 if linked else 1, "", linked))
-    if (root / "CMakeLists.txt").is_file():
+    if "CMakeLists.txt" not in skip and (guard is None or guard.status(root / "CMakeLists.txt") == "clear") and (root / "CMakeLists.txt").is_file():
         linked = {c for c, n in names.items() if c == "build"}
         recipes.append(Recipe("cmake -S . -B build && cmake --build build", "CMakeLists.txt",
                               4 if linked else 1, "", linked))
@@ -301,15 +305,19 @@ def _commands_in_workflow(text: str) -> list:
     return out
 
 
-def _from_docs(root: Path, candidates: list, skip: set = frozenset()) -> list:
+def _from_docs(root: Path, candidates: list, skip: set = frozenset(), guard=None) -> list:
     commands = []
     for name in DOC_FILES:
         path = root / name
-        if name not in skip and not any(name.startswith(s + "/") for s in skip) and path.is_file():
+        if name not in skip and not any(name.startswith(s + "/") for s in skip) \
+                and (guard is None or guard.status(path) == "clear") and path.is_file():
             commands += [(c, name) for c in _commands_in_markdown(path.read_text(encoding="utf-8", errors="replace"))]
     workflows = root / ".github" / "workflows"
-    if ".github" not in skip and workflows.is_dir() and not fs.is_link(workflows):
+    if ".github" not in skip and (guard is None or guard.status(workflows) == "clear") \
+            and workflows.is_dir() and not fs.is_link(workflows):
         for wf in sorted(workflows.glob("*.y*ml")):
+            if guard is not None and guard.status(wf) != "clear":
+                continue
             commands += [(c, f".github/workflows/{wf.name}")
                          for c in _commands_in_workflow(wf.read_text(encoding="utf-8", errors="replace"))]
     recipes = []
@@ -379,10 +387,10 @@ def discover(root: Path, candidates: list, excluded: Optional[set] = None,
     if agent_log_dirs is not None:
         found += _from_agent_logs(root, candidates, agent_log_dirs, guard)
     skip = set(excluded or ())
-    found += _from_makefile(root, candidates, skip)
-    found += _from_scripts(root, candidates, skip)
-    found += _from_ecosystem(root, candidates, skip)
-    found += _from_docs(root, candidates, skip)
+    found += _from_makefile(root, candidates, skip, guard)
+    found += _from_scripts(root, candidates, skip, guard)
+    found += _from_ecosystem(root, candidates, skip, guard)
+    found += _from_docs(root, candidates, skip, guard)
 
     merged: dict = {}
     rejected = []

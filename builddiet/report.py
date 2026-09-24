@@ -208,8 +208,8 @@ def render_plan(search, naive=None, skipped=(), multi=False, verified_requested=
         "=" * 64,
         _plan_table(plan, multi),
         "",
-        f"  Frees {format_size(plan.freed)}. Removed together, every item came back byte-for-byte",
-        f"  (see the joint check above). Measured joint rebuild {format_duration(sum(joint))}; "
+        f"  Frees {format_size(plan.freed)}. Joint recovery check passed",
+        f"  (see the checks above). Measured joint rebuild {format_duration(sum(joint))}; "
         f"individual estimates sum to {format_duration(plan.rebuild_seconds)}.",
     ]
     # only mention it when the difference is above timing noise
@@ -340,8 +340,8 @@ def render_options(options, *, where: str, projects: int, skipped=(), protected=
         f"  LEGGERO  restore copies bytes that already exist (copy, archive, git), or rebuild <= {light}",
         f"  NORMALE  rebuild <= {normal}",
         "  ESTREMO  everything proven, whatever it costs",
-        "Only items that come back byte-for-byte; each option was removed as a whole in a sandbox",
-        "and restored (joint verification). Protected and excluded paths are never included.",
+        "Only byte-identical items: recipes and workflows are jointly restored in a sandbox;",
+        "copy/archive/git-only options use checked source hashes. Protected paths stay out.",
     ]
     for p in protected:
         lines.append(f"  protected: {p}")

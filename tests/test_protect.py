@@ -9,12 +9,13 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from builddiet import cli, fs, manifest, protect, reclaim
+from builddiet import cli, fs, level0, manifest, protect, reclaim, recipes
 from builddiet.config import Config
 from builddiet.experiment import AnalysisError, analyze
 from builddiet.planner import collect_items
 from builddiet.protect import CLEAR, EXCLUDED, PROTECTED, UNKNOWN, Guard, ProtectionError
 from builddiet.scanner import LINK, USER_EXCLUDED, scan
+from builddiet.sandbox import Sandbox
 from builddiet.service import load_manifests, verified_plan
 from builddiet.watch import WatchSettings, cycle
 
@@ -167,6 +168,32 @@ class ScanTest(Isolated):
         with self.assertRaises(AnalysisError):
             analyze(root, Config(min_size=0), recipes_enabled=False)
 
+    def test_protected_file_is_neither_copied_nor_used_as_a_duplicate(self):
+        root = self.base / "proj"
+        write(root / "out.bin", b"same" * 1000)
+        write(root / "secret.bin", b"same" * 1000)
+        protect.protect(root / "secret.bin")
+        guard = Guard()
+        regions = scan(root, Config(min_size=0), guard=guard)
+        self.assertNotIn("out.bin", level0.find_recoverable(root, regions, guard=guard))
+        with Sandbox(root, base=self.base / "sandboxes", guard=guard) as sb:
+            sb.populate()
+            self.assertFalse((sb.project / "secret.bin").exists())
+            self.assertEqual((sb.project / "out.bin").read_bytes(), b"same" * 1000)
+
+    def test_protected_recipe_and_input_file_are_not_read(self):
+        root = self.base / "proj"
+        write(root / "out.bin", b"out")
+        write(root / "Makefile", b"out.bin:\n\tpython build.py\n")
+        write(root / "build.py", b"print('out.bin')\n")
+        protect.protect(root / "Makefile")
+        protect.protect(root / "build.py")
+        guard = Guard()
+        self.assertEqual(recipes.discover(root, ["out.bin"], guard=guard).recipes, [])
+        before = manifest.inputs_hash(root)
+        write(root / "Makefile", b"changed content of protected file")
+        self.assertEqual(manifest.inputs_hash(root), before)
+
 
 class LinkTest(Isolated):
     """A link inside a project that points into a protected area."""
@@ -183,6 +210,8 @@ class LinkTest(Isolated):
         if not make(self.root / "shortcut", self.vault):
             self.skipTest("cannot create this kind of link here")
         g = Guard()
+        with self.assertRaises(reclaim.ReclaimError):
+            reclaim._target(self.root, "shortcut/precious.bin")
         regions = {r.path: r for r in scan(self.root, Config(min_size=0), guard=g)}
         self.assertIn(regions["shortcut"].status, ("protected", LINK))
         self.assertNotEqual(regions["shortcut"].status, "candidate")
@@ -255,6 +284,16 @@ class DeletionTest(Isolated):
         victim = search.verified.plan.items[0].path
         done = reclaim.reclaim(search, manifests, excludes=[self.root / victim])
         self.assertEqual(done.deleted, [])
+        self.assertTrue((self.root / victim).exists())
+
+    def test_reclaim_refuses_a_newly_protected_log(self):
+        manifests, _ = load_manifests([self.root])
+        search, _ = verified_plan(manifests, 1, sandbox_dir=self.sb)
+        victim = search.verified.plan.items[0].path
+        protect.protect(reclaim.log_path(self.root))
+        done = reclaim.reclaim(search, manifests)
+        self.assertEqual(done.deleted, [])
+        self.assertIn("log is protected", done.refused[0][1])
         self.assertTrue((self.root / victim).exists())
 
     def run_auto(self, **kw):

@@ -25,7 +25,7 @@ from . import manifest as manifest_mod
 from .config import CONFIG_DIR, normalize_rel
 from .experiment import _workflow_env, run_command, run_workflow
 from .recipes import project_python, render
-from .sandbox import force_remove, is_within
+from .sandbox import force_remove, has_link_ancestor, is_within
 from .protect import Guard
 from .service import project_config
 from .verifier import fingerprint, signature, snapshot, snapshot_diff
@@ -53,6 +53,8 @@ def log_path(root: Path) -> Path:
 
 def read_log(root: Path) -> list:
     path = log_path(root)
+    if Guard().status(path) != "clear":
+        raise ReclaimError(f"reclaim log {path} is protected")
     if not path.is_file():
         return []
     return json.loads(path.read_text(encoding="utf-8"))
@@ -62,38 +64,53 @@ def _write_log(root: Path, records: list) -> None:
     path = log_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    with tmp.open("w", encoding="utf-8") as fh:
+        json.dump(records, fh, indent=2)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, path)
+    if os.name != "nt":
+        fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
 def _target(root: Path, rel: str) -> Path:
     rel = normalize_rel(rel)
     path = Path(os.path.abspath(root / rel))
-    if path == root or not is_within(path, root) or rel.split("/")[0] == CONFIG_DIR:
+    if path == root or not is_within(path, root) or rel.split("/")[0] == CONFIG_DIR \
+            or has_link_ancestor(path, root) or not is_within(path.resolve(strict=False), root):
         raise ReclaimError(f"refusing to touch {path}")
     return path
 
 
-def _preflight(root: Path, entries: list, guard: Guard) -> Optional[str]:
+def _preflight(root: Path, entries: list, guard: Guard) -> tuple:
     """Why this project's items must not be deleted now, or None. Protection is
     checked first, before anything inside an item is read."""
+    fingerprints = {}
     for e in entries:
         path = _target(root, e["path"])
         reason = guard.delete_verdict(path)
         if reason:
-            return reason
+            return reason, fingerprints
         if not os.path.lexists(path):
-            return f"{e['path']} no longer exists"
+            return f"{e['path']} no longer exists", fingerprints
         if not e.get("signature"):
-            return f"{e['path']} has no recorded signature; re-run `builddiet analyze`"
-        if signature(fingerprint(path, "full")) != e["signature"]:
-            return f"{e['path']} changed since it was proven; re-run `builddiet analyze`"
+            return f"{e['path']} has no recorded signature; re-run `builddiet analyze`", fingerprints
+        fp = fingerprint(path, "full")
+        if signature(fp) != e["signature"]:
+            return f"{e['path']} changed since it was proven; re-run `builddiet analyze`", fingerprints
+        fingerprints[e["path"]] = fp
         source = (e.get("recovery") or {}).get("source")
-        if source and guard.status(root / source) != "clear":
-            return f"the source of {e['path']} ({source}) is protected or excluded"
+        if (e.get("recovery") or {}).get("method") == "git" and not guard.allows_touch(root / ".git"):
+            return "the git recovery source is protected or excluded", fingerprints
+        if source and not guard.allows_touch(root / source):
+            return f"the source of {e['path']} ({source}) is protected or excluded", fingerprints
         if e.get("recovery") and not level0.source_unchanged(root, e["recovery"]):
-            return f"the source of {e['path']} changed since the analysis"
-    return None
+            return f"the source of {e['path']} changed since the analysis", fingerprints
+    return None, fingerprints
 
 
 def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: None,
@@ -115,13 +132,16 @@ def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: Non
         if guard.status(root) != "clear":
             result.refused.append((name, "the project is protected or excluded"))
             continue
-        stale = manifest_mod.staleness(m)
+        if guard.status(log_path(root)) != "clear":
+            result.refused.append((name, "the reclaim log is protected or excluded"))
+            continue
+        stale = manifest_mod.staleness(m, guard)
         if stale:
             result.refused.append((name, "analysis is stale: " + "; ".join(stale)))
             continue
         by_path = {e["path"]: e for e in m["entries"]}
         entries = [by_path[i.path] for i in items]
-        reason = _preflight(root, entries, guard)
+        reason, fingerprints = _preflight(root, entries, guard)
         if reason:
             result.refused.append((name, reason))
             log(f"reclaim   {name}: refused, {reason}")
@@ -131,11 +151,18 @@ def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: Non
             path = _target(root, e["path"])
             # write-ahead: the record that allows `restore` is on disk BEFORE the deletion;
             # if it cannot be written (e.g. disk full), nothing is deleted.
+            expected_entries = None
+            if e.get("identity") == "recreated":
+                expected_entries = {
+                    rel: "link" if isinstance(digest, str) and digest.startswith("link:") else "file"
+                    for rel, (_size, digest) in fingerprints[e["path"]].entries.items()
+                }
             records.append({
                 "path": e["path"], "kind": e["kind"], "bytes": e["bytes"], "signature": e["signature"],
                 "method": e.get("method"), "recipe": e.get("recipe"), "recipe_cwd": e.get("recipe_cwd", ""),
                 "recovery": e.get("recovery"), "rebuild_seconds": e.get("rebuild_seconds"),
                 "identity": e.get("identity"),
+                "expected_entries": expected_entries,
                 "deleted_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
             })
             try:
@@ -150,13 +177,21 @@ def reclaim(search, manifests: list, log: Callable[[str], None] = lambda _m: Non
     return result
 
 
-def _matches(target: Path, rec: dict) -> bool:
+def _matches(target: Path, rec: dict, *, allow_recreated: bool = False) -> bool:
     """Byte-identical to what was deleted; for items proven nondeterministic
     (a declared workflow recreates them with new bytes every run), it is enough
     that every file came back."""
     if signature(fingerprint(target, "full")) == rec["signature"]:
         return True
-    return rec.get("identity") == "recreated" and bool(fingerprint(target, "meta").entries)
+    expected = rec.get("expected_entries")
+    if not allow_recreated or rec.get("identity") != "recreated" or not expected:
+        return False
+    current = fingerprint(target, "meta").entries
+    return all(
+        rel in current and ("link" if isinstance(current[rel][1], str)
+                            and current[rel][1].startswith("link:") else "file") == kind
+        for rel, kind in expected.items()
+    )
 
 
 @dataclass
@@ -212,7 +247,9 @@ def restore(root: Path, paths: Optional[list] = None,
             target = _target(root, rec["path"])
             source = (rec.get("recovery") or {}).get("source")
             if guard.status(target) != "clear" or guard.contains_guarded(target) or (
-                    source and guard.status(root / source) != "clear"):
+                    source and not guard.allows_touch(root / source)) or (
+                    (rec.get("recovery") or {}).get("method") == "git"
+                    and not guard.allows_touch(root / ".git")):
                 result.failed.append((rec["path"], "protected or excluded: not touched"))
                 keep.append(rec)
                 continue
@@ -233,7 +270,7 @@ def restore(root: Path, paths: Optional[list] = None,
                     result.failed.append((rec["path"], str(exc)))
                     keep.append(rec)
                 continue
-            if os.path.lexists(target) and _matches(target, rec):
+            if os.path.lexists(target) and _matches(target, rec, allow_recreated=True):
                 result.restored.append(rec["path"])
             else:
                 result.failed.append((rec["path"], "came back with different bytes than were deleted"))

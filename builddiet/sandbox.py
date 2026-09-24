@@ -55,6 +55,16 @@ def is_within(child: Path, parent: Path) -> bool:
         return False
 
 
+def has_link_ancestor(path: Path, root: Path) -> bool:
+    """Whether an existing parent below ``root`` redirects through a link."""
+    for parent in Path(path).parents:
+        if parent == root:
+            return False
+        if os.path.lexists(parent) and fs.is_link(parent):
+            return True
+    return True  # root was not an ancestor
+
+
 def force_remove(path: Path) -> None:
     """Delete a file or tree; links (symlinks, junctions) are removed, never followed."""
     fs.remove(path)
@@ -149,8 +159,7 @@ class Sandbox:
                 full = os.path.join(directory, n)
                 if top and n == CONFIG_DIR:
                     skipped.append(n)
-                elif guard is not None and os.path.isdir(full) and not fs.is_link(full) \
-                        and guard.status(full) != "clear":
+                elif guard is not None and guard.status(full) != "clear":
                     skipped.append(n)
             return skipped
 
@@ -165,7 +174,9 @@ class Sandbox:
         """Absolute path of ``rel`` inside the sandbox copy, with escape checks."""
         rel = normalize_rel(rel)
         path = Path(os.path.abspath(self.project / rel))
-        if path == self.project or not is_within(path, self.project):
+        if path == self.project or not is_within(path, self.project) \
+                or has_link_ancestor(path, self.project) \
+                or not is_within(path.resolve(strict=False), self.project):
             raise SandboxError(f"refusing to touch {path}: not inside the sandbox copy")
         return path
 

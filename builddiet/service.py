@@ -27,7 +27,7 @@ def load_manifests(paths, allow_stale: bool = False, guard: Optional[Guard] = No
             skipped.append(f"{path}: no analysis found")
         for root in roots:
             m = manifest_mod.load(root)
-            reasons = manifest_mod.staleness(m)
+            reasons = manifest_mod.staleness(m, guard)
             if reasons and not allow_stale:
                 skipped.append(f"{m['name']}: stale ({'; '.join(reasons)}); re-run `builddiet analyze`")
                 continue

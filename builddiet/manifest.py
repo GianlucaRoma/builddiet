@@ -27,8 +27,9 @@ class ManifestError(RuntimeError):
     pass
 
 
-def git_head(root: Path) -> Optional[str]:
-    if not (Path(root) / ".git").exists():
+def git_head(root: Path, guard=None) -> Optional[str]:
+    git_dir = Path(root) / ".git"
+    if (guard is not None and not guard.allows_touch(git_dir)) or not git_dir.exists():
         return None
     try:
         out = subprocess.run(
@@ -44,18 +45,18 @@ def git_head(root: Path) -> Optional[str]:
     return out.stdout.decode().strip() or None
 
 
-def inputs_hash(root: Path) -> str:
+def inputs_hash(root: Path, guard=None) -> str:
     """Hash of the top-level files (lockfiles, build scripts, manifests...).
     Protected files are represented by their name only, never read."""
     from .protect import Guard
 
-    guard = Guard()
+    guard = guard if guard is not None else Guard()
     h = hashlib.sha256()
     for entry in sorted(os.scandir(root), key=lambda e: e.name):
-        if not entry.is_file(follow_symlinks=False) or fs.is_link(entry):
-            continue
         if guard.status(entry.path) != "clear":
             h.update(f"{entry.name}\0guarded\0".encode())
+            continue
+        if not entry.is_file(follow_symlinks=False) or fs.is_link(entry):
             continue
         size = entry.stat(follow_symlinks=False).st_size
         h.update(f"{entry.name}\0{size}\0".encode())
@@ -68,24 +69,24 @@ def inputs_hash(root: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def environment(root: Path, cfg: Config) -> dict:
+def environment(root: Path, cfg: Config, guard=None) -> dict:
     return {
         "platform": platform.platform(),
         "python": platform.python_version(),
-        "git_head": git_head(root),
-        "inputs": inputs_hash(root),
+        "git_head": git_head(root, guard),
+        "inputs": inputs_hash(root, guard),
         "config": cfg.digest(),
     }
 
 
-def build(root: Path, cfg: Config, *, entries, baseline, total_bytes, warnings) -> dict:
+def build(root: Path, cfg: Config, *, entries, baseline, total_bytes, warnings, guard=None) -> dict:
     return {
         "version": MANIFEST_VERSION,
         "tool": f"builddiet {__version__}",
         "project": str(Path(root).resolve()),
         "name": Path(root).resolve().name,
         "created": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-        "environment": environment(root, cfg),
+        "environment": environment(root, cfg, guard),
         "commands": {"regenerate": cfg.regenerate, "verify": cfg.verify},
         "hash_mode": cfg.hash_mode,
         "reuse": dict(cfg.reuse),
@@ -136,7 +137,8 @@ def find(path: Path, max_depth: int = 4, guard=None) -> list:
         try:
             children = sorted(
                 e.path for e in os.scandir(current)
-                if not fs.is_link(e) and e.is_dir(follow_symlinks=False) and not e.name.startswith(".")
+                if (guard is None or guard.status(e.path) == "clear")
+                and not fs.is_link(e) and e.is_dir(follow_symlinks=False) and not e.name.startswith(".")
                 and e.name not in ("node_modules", "target", "__pycache__")
             )
         except OSError:
@@ -148,7 +150,7 @@ def find(path: Path, max_depth: int = 4, guard=None) -> list:
     return found
 
 
-def staleness(manifest: dict) -> list:
+def staleness(manifest: dict, guard=None) -> list:
     """Reasons why the proofs in ``manifest`` may no longer hold."""
     root = Path(manifest["project"])
     if not root.is_dir():
@@ -157,10 +159,10 @@ def staleness(manifest: dict) -> list:
     reasons = []
     if recorded.get("platform") != platform.platform():
         reasons.append("platform/toolchain host changed")
-    head = git_head(root)
+    head = git_head(root, guard)
     if recorded.get("git_head") != head:
         reasons.append("git HEAD changed since analysis")
-    if recorded.get("inputs") != inputs_hash(root):
+    if recorded.get("inputs") != inputs_hash(root, guard):
         reasons.append("top-level project files changed since analysis")
     try:
         cfg = load_config(root)

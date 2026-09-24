@@ -5,22 +5,23 @@ BuildDiet exists because people are afraid to delete the wrong thing. It must ne
 ## Invariants
 
 1. **The original project is read-only to analysis.** `analyze`, `plan` and joint verification write only `.builddiet/` (config and manifest). Only `reclaim`/`watch` delete, and only under invariant 13. If anything else in the original changes during an analysis or a joint check, the report warns, and a joint check fails.
-2. **Destruction happens only in the sandbox.** `Sandbox.target()` normalises every path, rejects `..`, absolute paths and the sandbox root itself, and checks that the result resolves inside the sandbox copy. Every removal and every restore goes through it.
+
+2. **Destruction happens only in the sandbox.** `Sandbox.target()` normalises every path, rejects `..`, absolute paths, linked parent directories and the sandbox root itself, and checks that the result resolves inside the sandbox copy. Every removal and every restore goes through it.
 3. **The sandbox is never inside the project.** This is checked when the sandbox is created and again before it is removed.
 4. **Hashes, not names.** Level-0 proofs compare SHA-256 of real bytes: archive members are decompressed, and git content is rendered through the checkout filters.
 5. **"Not needed" is not "disposable".** Something the project runs fine without, but that nothing recreates, is NOT PROVEN / NOT REGENERATED and is never planned.
 6. **"Regenerable" is not "your bytes are regenerable".** Every comparison is against the user's original bytes. A deterministic regeneration that differs from them is STALE and is never planned.
 7. **Recipes must not touch anything else.** A discovered recipe proves nothing if it changes any other existing file. The only exception is volatile files (`*.log`, `logs/`, `__pycache__/`, `*.pyc`, tool caches).
-8. **Dangerous commands are never run.** Discovered commands that change git state, delete files, move data over the network, publish, install packages, drive containers or cloud tools, administer the system, or use absolute paths outside the project are refused, whatever their source.
+8. **Recognizable dangerous command lines are refused.** The filter rejects discovered commands that visibly change git state, delete files, move data over the network, publish, install packages, drive containers or cloud tools, administer the system, or use absolute paths outside the project. A permitted script can still perform these actions internally; the sandbox copy does not isolate network or other external effects.
 9. **The user approves discovered commands.** They are listed, with their evidence, before anything runs. In non-interactive use nothing runs without `--yes`.
 10. **Agent logs are opt-in and local.** Nothing reads `~/.codex` or `~/.claude` unless you pass `--agent-logs` (or `--agent-logs-dir`). Only commands whose working directory is inside the analyzed project are kept. Nothing is sent anywhere.
-11. **Plans are verified jointly.** A set is presented as a JOINTLY VERIFIED PLAN only after all of its items have been removed together in a sandbox and restored byte-for-byte. `--no-verify` output is labelled NOT JOINTLY VERIFIED.
+11. **Plans are verified jointly.** Recipe and workflow items are removed together in a sandbox and restored byte-for-byte. A plan containing only level-0 items uses unchanged source hashes and checks that no recovery source is itself removed; it needs no sandbox copy. `--no-verify` output is labelled NOT JOINTLY VERIFIED.
 12. **Proofs expire.** The manifest records the platform, git HEAD, a hash of the top-level project files, and the config. `plan` refuses stale analyses unless you pass `--allow-stale`. Level-0 sources are re-checked when a plan is verified.
 13. **Deletion is narrow, checked and reversible.**
     * `analyze`, `plan`, `market` and `report` never delete anything.
     * `reclaim` and `watch` delete only the items of a JOINTLY VERIFIED option (or `--free` plan), and only those that come back byte-for-byte.
     * Just before deletion each item is re-hashed and must match the signature recorded when it was proven. Its recovery source must be unchanged, and the analysis must not be stale. If any check fails, nothing in that project is deleted.
-    * The record needed to restore an item is written to `.builddiet/reclaimed.json` *before* the item is deleted. If it cannot be written, nothing more is deleted.
+    * The record needed to restore an item is written and flushed to `.builddiet/reclaimed.json` *before* the item is deleted. If it cannot be written, nothing more is deleted.
     * `restore` brings items back and checks the hashes.
 14. **Nobody is surprised.**
     * `reclaim` asks you to type `reclaim`.

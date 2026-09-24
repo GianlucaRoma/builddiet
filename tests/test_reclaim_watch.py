@@ -69,6 +69,22 @@ class Base(unittest.TestCase):
 
 
 class ReclaimRestoreTest(Base):
+    def test_nondeterministic_restore_requires_all_original_paths(self):
+        target = self.base / "nondeterministic"
+        write(target / "a.bin", b"original a")
+        write(target / "b.bin", b"original b")
+        rec = {
+            "signature": signature(fingerprint(target, "full")),
+            "identity": "recreated",
+            "expected_entries": {"a.bin": "file", "b.bin": "file"},
+        }
+        write(target / "a.bin", b"different a")
+        (target / "b.bin").unlink()
+        self.assertFalse(reclaim._matches(target, rec, allow_recreated=True))
+        write(target / "b.bin", b"different b")
+        self.assertFalse(reclaim._matches(target, rec))  # pre-existing data is not a restore
+        self.assertTrue(reclaim._matches(target, rec, allow_recreated=True))
+
     def test_fixture(self):
         self.assertEqual(self.proven, {"out", "models", "assets"})
 

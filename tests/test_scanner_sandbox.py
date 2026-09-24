@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,22 @@ class ScannerTest(unittest.TestCase):
 
 
 class SandboxTest(unittest.TestCase):
+    def test_rejects_linked_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            src = base / "proj"
+            src.mkdir()
+            outside = base / "outside"
+            outside.mkdir()
+            with Sandbox(src, base=base / "sb") as sb:
+                sb.populate()
+                try:
+                    os.symlink(outside, sb.project / "escape", target_is_directory=True)
+                except (OSError, NotImplementedError):
+                    self.skipTest("symlinks are not available")
+                with self.assertRaises(SandboxError):
+                    sb.target("escape/data.bin")
+
     def test_refuses_sandbox_inside_project(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SandboxError):
