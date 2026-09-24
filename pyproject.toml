@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "builddiet"
-version = "0.1.0"
+version = "0.2.0"
 description = "Point it at a folder: it proves by experiment what can be brought back byte-for-byte, what that costs, and plans the cheapest verified way to reclaim disk space."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,7 +30,7 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/GianlucaRoma/builddiet"
+Homepage = "https://gianlucaroma.github.io/builddiet/"
 Documentation = "https://github.com/GianlucaRoma/builddiet#documentation"
 Changelog = "https://github.com/GianlucaRoma/builddiet/blob/main/CHANGELOG.md"
 

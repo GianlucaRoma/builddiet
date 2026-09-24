@@ -210,7 +210,7 @@ def _confirm_recipes(found: list, rejected: list, yes: bool) -> bool:
         answer = input("Try them in the sandbox? [Y/n] ").strip().lower()
     except EOFError:
         return False
-    return answer in ("", "y", "yes", "s", "si")
+    return answer in ("", "y", "yes")
 
 
 def _load_with_warning(root: Path) -> dict:
@@ -318,10 +318,10 @@ def _reclaim_option(args) -> int:
         return 3
     choice = ALIASES.get((args.option or "").lower()) if args.option else None
     if args.option and choice is None:
-        raise ConfigError(f"unknown option {args.option!r}: use leggero, normale or estremo")
+        raise ConfigError(f"unknown option {args.option!r}: use light, normal or extreme")
     if choice is None:
         if not sys.stdin.isatty():
-            print("\nNothing deleted: choose with --option leggero|normale|estremo (and --yes).")
+            print("\nNothing deleted: choose with --option light|normal|extreme (and --yes).")
             return 5
         names = " / ".join(n.lower() for n in usable)
         try:
@@ -452,13 +452,13 @@ def cmd_watch(args) -> int:
     if not (settings.aggressive_below < settings.reclaim_below < settings.prepare_below <= settings.keep_free):
         raise ConfigError("thresholds must satisfy aggressive < reclaim < prepare <= keep-free")
     if settings.auto_max not in ALIASES.values():
-        raise ConfigError("--auto-max must be leggero, normale or estremo")
+        raise ConfigError("--auto-max must be light, normal or extreme")
     base = Path(args.path).resolve()
     _log(f"watching  {base}  (sandboxes: {settings.sandbox_dir or default_sandbox_base()})")
     _log(f"          prepare < {settings.prepare_below}%, reclaim < {settings.reclaim_below}%, "
          f"aggressive < {settings.aggressive_below}%, back to {settings.keep_free}% free")
-    _log(f"          options: LEGGERO (copy or rebuild <= {format_duration(settings.light_max)}), "
-         f"NORMALE (rebuild <= {format_duration(settings.normal_max)}), ESTREMO (everything proven)")
+    _log(f"          options: LIGHT (copy or rebuild <= {format_duration(settings.light_max)}), "
+         f"NORMAL (rebuild <= {format_duration(settings.normal_max)}), EXTREME (everything proven)")
     _log(f"          automatic reclaim: " + (f"ON, up to {settings.auto_max}" if settings.auto
                                              else "off (asks first)"))
     watch_run(base, settings, once=args.once, log=_log)
@@ -514,13 +514,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="overwrite an existing config")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("analyze", help="analyze a project or a folder of projects; show LEGGERO / NORMALE / ESTREMO")
+    p = sub.add_parser("analyze", help="analyze a project or a folder of projects; show LIGHT / NORMAL / EXTREME")
     p.add_argument("path", nargs="?", default=".")
     p.add_argument("--report", action="store_true", help="also print the full per-project report (single project)")
     p.add_argument("--no-options", action="store_true", help="analyze only; do not compute the options")
     p.add_argument("--max-attempts", type=int, default=5, help=argparse.SUPPRESS)
-    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
-    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--light-max", default="1s", help="LIGHT: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMAL: max measured rebuild of an item (5m)")
     p.add_argument("--details", action="store_true", help="list every item of every option")
     p.add_argument("--yes", "-y", action="store_true",
                    help="run the discovered recipes (in the sandbox) without asking")
@@ -553,11 +553,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_report)
 
-    p = sub.add_parser("plan", help="show LEGGERO / NORMALE / ESTREMO (jointly verified)")
+    p = sub.add_parser("plan", help="show LIGHT / NORMAL / EXTREME (jointly verified)")
     p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
     p.add_argument("--free", help="advanced / CI: a fixed amount to free instead of the three options")
-    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
-    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--light-max", default="1s", help="LIGHT: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMAL: max measured rebuild of an item (5m)")
     p.add_argument("--details", action="store_true", help="list every item of every option")
     p.add_argument("--strict", action="store_true", help="only byte-identical regenerations")
     p.add_argument("--include-git", action="store_true",
@@ -574,13 +574,13 @@ def build_parser() -> argparse.ArgumentParser:
                    help="leave this path out for this run (protections always apply)")
     p.set_defaults(func=cmd_plan)
 
-    p = sub.add_parser("reclaim", help="choose LEGGERO / NORMALE / ESTREMO and delete it (asks first)")
+    p = sub.add_parser("reclaim", help="choose LIGHT / NORMAL / EXTREME and delete it (asks first)")
     p.add_argument("paths", nargs="*", default=["."], help="projects or folders of projects")
-    p.add_argument("--option", help="leggero | normale | estremo (otherwise you are asked)")
+    p.add_argument("--option", help="light | normal | extreme (otherwise you are asked)")
     p.add_argument("--free", help="advanced / CI: a fixed amount to free instead of an option")
     p.add_argument("--yes", action="store_true", help="do not ask for confirmation")
-    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
-    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--light-max", default="1s", help="LIGHT: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMAL: max measured rebuild of an item (5m)")
     p.add_argument("--details", action="store_true", help="list every item of every option")
     p.add_argument("--allow-nondeterministic", action="store_true",
                    help="also delete workflow outputs that come back with different bytes (timestamps)")
@@ -615,10 +615,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reclaim-below", type=float, default=10.0, help="%% free: offer to reclaim (10)")
     p.add_argument("--aggressive-below", type=float, default=5.0, help="%% free: bigger budget (5)")
     p.add_argument("--keep-free", type=float, default=20.0, help="%% free to get back to (20)")
-    p.add_argument("--light-max", default="1s", help="LEGGERO: max measured rebuild of an item (1s)")
-    p.add_argument("--normal-max", default="5m", help="NORMALE: max measured rebuild of an item (5m)")
+    p.add_argument("--light-max", default="1s", help="LIGHT: max measured rebuild of an item (1s)")
+    p.add_argument("--normal-max", default="5m", help="NORMAL: max measured rebuild of an item (5m)")
     p.add_argument("--auto", action="store_true", help="reclaim the proposed option without asking")
-    p.add_argument("--auto-max", default="normale", help="largest option --auto may reclaim (normale)")
+    p.add_argument("--auto-max", default="normal", help="largest option --auto may reclaim (normal)")
     p.add_argument("--allow-recipes", action="store_true",
                    help="let analyses run discovered recipes (sandbox only) without asking")
     p.add_argument("--agent-logs", action="store_true", help="also use Codex / Claude Code session logs")

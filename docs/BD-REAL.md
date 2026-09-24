@@ -100,8 +100,8 @@ With the boundaries tightened on purpose (`--light-max 0.05s --normal-max 0.5s`,
 
 | option | frees | rebuild | items |
 |---|---|---|---|
-| LEGGERO | 1.5 MB | 0.0s | derived/shards |
-| NORMALE | 2.7 MB | 0.5s | + derived/features.bin (0.4s), derived/corpus.idx.json (0.1s) |
-| ESTREMO | 8.0 MB | 1.1s | + cache/ngrams.json (0.6s) |
+| LIGHT | 1.5 MB | 0.0s | derived/shards |
+| NORMAL | 2.7 MB | 0.5s | + derived/features.bin (0.4s), derived/corpus.idx.json (0.1s) |
+| EXTREME | 8.0 MB | 1.1s | + cache/ngrams.json (0.6s) |
 
-`reclaim --option estremo --yes` freed 8.0 MB. `restore` brought all 4 items back byte-identical. It also reported, as always here, that the declared build refreshed the stale `derived/weights.q8`.
+`reclaim --option extreme --yes` freed 8.0 MB. `restore` brought all 4 items back byte-identical. It also reported, as always here, that the declared build refreshed the stale `derived/weights.q8`.

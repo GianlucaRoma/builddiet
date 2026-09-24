@@ -28,7 +28,7 @@ python3 -m venv .venv
 
 On Windows, install into a virtual environment and use `Scripts\builddiet.exe`; the examples below use `D:/Projects` as a sample workspace path. `restore` targets the individual project that was reclaimed.
 
-> *Non indovina cosa puoi cancellare. Lo verifica.*
+> *No proof of recovery? No deletion.*
 
 ## How it differs from other tools
 
@@ -49,36 +49,36 @@ $ builddiet analyze D:/builddiet-bdzero/workspace
 BUILDDIET - what D:uilddiet-bdzero\workspace can give back
 
   option                     frees   rebuild   items                             joint verification
-  LEGGERO                   1.9 MB      0.2s   3: 1 recipe, 1 copy, 1 archive    PASS
-  NORMALE  <- recommended   2.3 MB      1.5s   4: 2 recipes, 1 copy, 1 archive   PASS
-  ESTREMO                   2.3 MB      1.5s   4: 2 recipes, 1 copy, 1 archive   PASS
+  LIGHT                   1.9 MB      0.2s   3: 1 recipe, 1 copy, 1 archive    PASS
+  NORMAL  <- recommended   2.3 MB      1.5s   4: 2 recipes, 1 copy, 1 archive   PASS
+  EXTREME                   2.3 MB      1.5s   4: 2 recipes, 1 copy, 1 archive   PASS
 
-LEGGERO:
+LIGHT:
   features     1.3 MB   0.0s  copy of backups/features-2026-09-01
   cache      640.0 KB   0.2s  run: python -c "import hashlib, os; ...   (found in an agent log)
   release     22.7 KB   0.0s  extract from dist/app-1.0.zip
-NORMALE adds:
+NORMAL adds:
   models     327.7 KB   1.3s  run: python scripts/train.py
 
 $ builddiet reclaim D:/builddiet-bdzero/workspace
-Which option? [leggero / normale / estremo / nothing] normale
-NORMALE: delete 4 items and free 2.3 MB (rebuild if needed: 1.5s)? Type 'reclaim' to confirm: reclaim
-NORMALE: freed 2.3 MB (4 items).
+Which option? [light / normal / extreme / nothing] normal
+NORMAL: delete 4 items and free 2.3 MB (rebuild if needed: 1.5s)? Type 'reclaim' to confirm: reclaim
+NORMAL: freed 2.3 MB (4 items).
 ```
 
-(The interactive prompts of `reclaim` are shown as the code prints them; the gate itself ran the non-interactive form `--option normale --yes`, and the result line is real.)
+(The interactive prompts of `reclaim` are shown as the code prints them; the gate itself ran the non-interactive form `--option normal --yes`, and the result line is real.)
 
-On such a small project ESTREMO adds nothing, because nothing costs more than 5 minutes to rebuild. On the BD-REAL project, with the boundaries tightened to `--light-max 0.05s --normal-max 0.5s`, the three options differ: 1.5 MB, 2.7 MB and 8.0 MB.
+On such a small project EXTREME adds nothing, because nothing costs more than 5 minutes to rebuild. On the BD-REAL project, with the boundaries tightened to `--light-max 0.05s --normal-max 0.5s`, the three options differ: 1.5 MB, 2.7 MB and 8.0 MB.
 
 Every item goes into an option according to the **measured cost of getting that item back**:
 
 | Option | An item belongs here if | In practice |
 |---|---|---|
-| **LEGGERO** | it is restored by copying bytes that already exist (identical copy, archive, git), or its measured rebuild takes ≤ `--light-max` (1s) | practically free |
-| **NORMALE** (recommended) | its measured rebuild takes ≤ `--normal-max` (5 min) | cheap derived data |
-| **ESTREMO** | it is PROVEN, whatever its rebuild time | everything that can provably come back |
+| **LIGHT** | it is restored by copying bytes that already exist (identical copy, archive, git), or its measured rebuild takes ≤ `--light-max` (1s) | practically free |
+| **NORMAL** (recommended) | its measured rebuild takes ≤ `--normal-max` (5 min) | cheap derived data |
+| **EXTREME** | it is PROVEN, whatever its rebuild time | everything that can provably come back |
 
-The options are nested (LEGGERO ⊆ NORMALE ⊆ ESTREMO). Each option shows:
+The options are nested (LIGHT ⊆ NORMAL ⊆ EXTREME). Each option shows:
 
 * the space it frees;
 * the measured rebuild time;
@@ -88,7 +88,7 @@ The options are nested (LEGGERO ⊆ NORMALE ⊆ ESTREMO). Each option shows:
 
 If an option fails its joint verification, it is retried without one item at a time, and the items left out are listed. Only items that come back byte-for-byte are ever offered.
 
-`reclaim` asks which option you want, then asks you to type `reclaim`. For scripts, use `--option normale --yes`.
+`reclaim` asks which option you want, then asks you to type `reclaim`. For scripts, use `--option normal --yes`.
 
 ## Automatic mode: `watch`
 
@@ -101,11 +101,11 @@ builddiet watch D:/Projects
 | Free space | What `watch` does |
 |---|---|
 | ≥ 15% | keeps the analyses up to date; nothing else |
-| < 15% | computes and jointly verifies the three options; picks the smallest that gets back to 20% free (LEGGERO or NORMALE) |
+| < 15% | computes and jointly verifies the three options; picks the smallest that gets back to 20% free (LIGHT or NORMAL) |
 | < 10% | proposes it, through a desktop dialog or the terminal, and waits for your yes |
-| < 5% | ESTREMO may be proposed too |
+| < 5% | EXTREME may be proposed too |
 
-With `--auto` it reclaims the proposed option by itself, but never one above `--auto-max` (default **NORMALE**); above that it asks. Sandboxes go to the local drive with the most free space, so verification still works when the watched drive is full (`--sandbox-dir` or `$BUILDDIET_SANDBOX_DIR` to pin it).
+With `--auto` it reclaims the proposed option by itself, but never one above `--auto-max` (default **NORMAL**); above that it asks. Sandboxes go to the local drive with the most free space, so verification still works when the watched drive is full (`--sandbox-dir` or `$BUILDDIET_SANDBOX_DIR` to pin it).
 
 **What gets deleted, and how to undo it.**
 
@@ -216,11 +216,11 @@ Details: [docs/SAFETY.md](docs/SAFETY.md) and [docs/THREAT_MODEL.md](docs/THREAT
 ## Options you may need
 
 ```bash
-builddiet watch DIR --auto                       # reclaim the proposed option (up to NORMALE) by itself
-builddiet watch DIR --auto --auto-max estremo     # allow ESTREMO too when it is the proposal
+builddiet watch DIR --auto                       # reclaim the proposed option (up to NORMAL) by itself
+builddiet watch DIR --auto --auto-max extreme     # allow EXTREME too when it is the proposal
 builddiet watch DIR --allow-recipes --agent-logs  # let unattended analyses use discovered recipes
 builddiet market DIR                              # what every project can give back, cheapest first
-builddiet reclaim DIR --option normale --yes      # non-interactive choice
+builddiet reclaim DIR --option normal --yes      # non-interactive choice
 builddiet plan DIR --details                      # every item of every option
 builddiet plan DIR --light-max 5s --normal-max 30m  # move the option boundaries (always shown)
 builddiet restore PROJECT [path ...]              # bring reclaimed items back, byte-checked
@@ -276,7 +276,7 @@ From a source checkout or archive:
 python -m pip install .
 ```
 
-After the repository and its `v0.1.0` tag are public at the URLs in `pyproject.toml`, users can also install with `python -m pip install git+https://github.com/GianlucaRoma/builddiet@v0.1.0`. For development use `python -m pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). The package is not on PyPI yet.
+To install the current development version directly from GitHub, use `python -m pip install git+https://github.com/GianlucaRoma/builddiet.git@main`. For editable development use `python -m pip install -e .` (see [CONTRIBUTING.md](CONTRIBUTING.md)). A GitHub Release triggers the PyPI publishing workflow; until one is published, install from source or GitHub.
 
 ## Documentation
 

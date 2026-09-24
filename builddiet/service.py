@@ -87,7 +87,7 @@ def joint_verifier(manifests: list, *, sandbox_dir: Optional[Path] = None, force
 def reclaim_options(manifests: list, *, sandbox_dir: Optional[Path] = None, force: bool = False,
                     include_git: bool = False, rule=None, max_attempts: int = 5,
                     log: Callable[[str], None] = lambda _m: None, guard: Optional[Guard] = None) -> list:
-    """LEGGERO / NORMALE / ESTREMO for ``manifests``, each jointly verified."""
+    """LIGHT / NORMAL / EXTREME for ``manifests``, each jointly verified."""
     from .options import build_options
 
     guard = guard if guard is not None else Guard()

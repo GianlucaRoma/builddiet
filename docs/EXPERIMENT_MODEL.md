@@ -103,7 +103,7 @@ If the check fails, each failing item is excluded in turn and the knapsack is so
 * **Full copies.** Each analysis, and each joint check that runs anything, copies the whole project.
 * **Timing.** Costs come from a single measured run.
 
-## The three options (LEGGERO / NORMALE / ESTREMO)
+## The three options (LIGHT / NORMAL / EXTREME)
 
 This is the everyday interface: `analyze <folder>`, `plan <folder>` and `reclaim <folder>` present these options, and `watch` proposes one of them. Nobody types an amount.
 
@@ -112,20 +112,20 @@ This is the everyday interface: `analyze <folder>`, `plan <folder>` and `reclaim
 **Placement** of an eligible item `i` with measured rebuild time `t(i)` (`options.TierRule`):
 
 ```
-LEGGERO  if i is restored by copying existing bytes (duplicate, archive, git)  or  t(i) <= light_max
-NORMALE  if t(i) <= normal_max
-ESTREMO  otherwise
+LIGHT  if i is restored by copying existing bytes (duplicate, archive, git)  or  t(i) <= light_max
+NORMAL  if t(i) <= normal_max
+EXTREME  otherwise
 defaults: light_max = 1s, normal_max = 5m  (--light-max, --normal-max; always printed with the options)
 ```
 
-**Options** are cumulative: `LEGGERO = {i : tier(i) = LEGGERO}`, `NORMALE = LEGGERO ∪ {tier = NORMALE}`, `ESTREMO = everything eligible`. For each option and each project:
+**Options** are cumulative: `LIGHT = {i : tier(i) = LIGHT}`, `NORMAL = LIGHT ∪ {tier = NORMAL}`, `EXTREME = everything eligible`. For each option and each project:
 
 1. Verify the whole set jointly.
 2. If that fails, retry without one item at a time, smallest first, up to `--max-attempts` sets.
 3. The first set that passes is the option for that project. The items left out are listed with the reason.
 4. A fatal failure (for example out of disk space) leaves the project out of that option.
 
-`frees` is the sum of the bytes. `rebuild` is the sum of the individual measured rebuild times (the joint check also measures the actual joint time). NORMALE is the recommended option; if it is empty and LEGGERO is not, LEGGERO is.
+`frees` is the sum of the bytes. `rebuild` is the sum of the individual measured rebuild times (the joint check also measures the actual joint time). NORMAL is the recommended option; if it is empty and LIGHT is not, LIGHT is.
 
 ## Automatic mode (`watch`) and deletion (`reclaim`)
 
@@ -138,14 +138,14 @@ defaults: light_max = 1s, normal_max = 5m  (--light-max, --normal-max; always pr
 | Level | Condition (defaults) | Options that may be proposed |
 |---|---|---|
 | ok | ≥ 15% free | - |
-| prepare | < 15% | LEGGERO, NORMALE (computed and reported, never deleted) |
-| reclaim | < 10% | LEGGERO, NORMALE |
-| aggressive | < 5% | LEGGERO, NORMALE, ESTREMO |
+| prepare | < 15% | LIGHT, NORMAL (computed and reported, never deleted) |
+| reclaim | < 10% | LIGHT, NORMAL |
+| aggressive | < 5% | LIGHT, NORMAL, EXTREME |
 
 4. **Propose** the smallest allowed option that frees what is needed to get back to `--keep-free` (20%). If none is enough, propose the largest allowed one.
 5. **Act.**
    * `reclaim` and `aggressive` ask, via a desktop dialog or the terminal. An unanswered question is a "no".
-   * With `--auto`, the proposal is reclaimed without asking only if it is not above `--auto-max` (default NORMALE); otherwise `watch` asks.
+   * With `--auto`, the proposal is reclaimed without asking only if it is not above `--auto-max` (default NORMAL); otherwise `watch` asks.
 
 `reclaim`, per project:
 

@@ -69,7 +69,7 @@ The 2 MB joint check copied the workspace into a fresh sandbox, removed all thre
 * **Cost.** Recipes first used "run time minus warm run time", as for a declared workflow. That makes a script that always does its full work look free: `models/` showed 0.0s. Recipe cost is now the full run time.
 * **Robustness.** A Windows console (cp1252) crashed on a non-ASCII character in a tool's error message. CLI output is now written with replacement characters.
 
-## Final gate: the three options (LEGGERO / NORMALE / ESTREMO)
+## Final gate: the three options (LIGHT / NORMAL / EXTREME)
 
 Re-run from scratch with the final v0.1 code: `builddiet analyze <workspace>`, with no amount given. Results:
 
@@ -78,9 +78,9 @@ Re-run from scratch with the final v0.1 code: `builddiet analyze <workspace>`, w
 
 | option | frees | rebuild | items | joint verification |
 |---|---|---|---|---|
-| LEGGERO | 1.9 MB | 0.2s | features (copy), release (archive), cache (agent-log recipe, 0.2s) | PASS |
-| **NORMALE** (recommended) | 2.3 MB | 1.5s | + models (`train.py`, 1.3s) | PASS |
-| ESTREMO | 2.3 MB | 1.5s | nothing more costs above 5 minutes | PASS |
+| LIGHT | 1.9 MB | 0.2s | features (copy), release (archive), cache (agent-log recipe, 0.2s) | PASS |
+| **NORMAL** (recommended) | 2.3 MB | 1.5s | + models (`train.py`, 1.3s) | PASS |
+| EXTREME | 2.3 MB | 1.5s | nothing more costs above 5 minutes | PASS |
 
-* `reclaim --option normale --yes` freed 2.3 MB (4 items).
+* `reclaim --option normal --yes` freed 2.3 MB (4 items).
 * `restore` brought all 4 back, and every file of the workspace was byte-identical to before.

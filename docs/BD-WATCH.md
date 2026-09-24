@@ -93,12 +93,12 @@ The gate was re-run from scratch after protected paths were added. `BUILDDIET_HO
 Re-run from scratch on the real D: drive (3.9% free, "aggressive"). The setup was: `ml/workspace/models` protected (given as `ML\...`), `corpus/workspace/cache` excluded with `--exclude`, and a gate-only `BUILDDIET_HOME`.
 
 * **Cycle 1: `--auto`, default boundaries.**
-  * 201.5 GB were needed; the three options were identical (4.2 MB, 5 items, all PASS). The proposal was LEGGERO, the smallest of the equal options.
-  * Within `--auto-max NORMALE`, so it was reclaimed automatically: 5 items.
+  * 201.5 GB were needed; the three options were identical (4.2 MB, 5 items, all PASS). The proposal was LIGHT, the smallest of the equal options.
+  * Within `--auto-max NORMAL`, so it was reclaimed automatically: 5 items.
   * `models` and `cache` were untouched.
 * **Restore:** all 5 items came back byte-identical.
 * **Cycle 3: `--auto`, with declared boundaries `--light-max 0.05s --normal-max 0.3s`.**
-  * The options were LEGGERO 3.0 MB, NORMALE 3.0 MB and ESTREMO 4.2 MB, and ESTREMO was proposed (the disk is critical).
-  * The log said "ESTREMO is above --auto-max NORMALE: asking instead", and with nobody to answer, **nothing was deleted**.
-* **Cycle 4: the same with `--auto-max estremo`.** ESTREMO was reclaimed (5 items, 4.2 MB).
+  * The options were LIGHT 3.0 MB, NORMAL 3.0 MB and EXTREME 4.2 MB, and EXTREME was proposed (the disk is critical).
+  * The log said "EXTREME is above --auto-max NORMAL: asking instead", and with nobody to answer, **nothing was deleted**.
+* **Cycle 4: the same with `--auto-max extreme`.** EXTREME was reclaimed (5 items, 4.2 MB).
 * **Restore:** everything came back byte-identical. Of 56 files, the only difference is the stale `weights.q8`, refreshed by the declared build and reported by `restore`. No sandbox was left behind.

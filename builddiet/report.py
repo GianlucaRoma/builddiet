@@ -292,7 +292,7 @@ def _items_summary(option) -> str:
 
 def render_options(options, *, where: str, projects: int, skipped=(), protected=(), excluded=(),
                    rule=None, details: bool = False) -> str:
-    """LEGGERO / NORMALE / ESTREMO, with how each item was placed."""
+    """LIGHT / NORMAL / EXTREME, with how each item was placed."""
     lines = [f"BUILDDIET - what {where} can give back", ""]
     context = [f"{projects} project{'s' if projects != 1 else ''} analyzed"]
     if protected:
@@ -318,7 +318,7 @@ def render_options(options, *, where: str, projects: int, skipped=(), protected=
         previous |= {(i.root, i.path) for i in o.items}
         if not added and not o.dropped:
             continue
-        lines += ["", f"{o.name}" + (" adds:" if o.name != "LEGGERO" else ":")]
+        lines += ["", f"{o.name}" + (" adds:" if o.name != "LIGHT" else ":")]
         shown = added if details else sorted(added, key=lambda i: -i.bytes)[:8]
         for i in sorted(shown, key=lambda i: -i.bytes):
             label = i.path if len({x.root for x in o.items}) <= 1 else f"{i.project}/{i.path}"
@@ -337,9 +337,9 @@ def render_options(options, *, where: str, projects: int, skipped=(), protected=
     lines += [
         "",
         "How an item is placed (by the measured cost of getting that item back):",
-        f"  LEGGERO  restore copies bytes that already exist (copy, archive, git), or rebuild <= {light}",
-        f"  NORMALE  rebuild <= {normal}",
-        "  ESTREMO  everything proven, whatever it costs",
+        f"  LIGHT  restore copies bytes that already exist (copy, archive, git), or rebuild <= {light}",
+        f"  NORMAL  rebuild <= {normal}",
+        "  EXTREME  everything proven, whatever it costs",
         "Only byte-identical items: recipes and workflows are jointly restored in a sandbox;",
         "copy/archive/git-only options use checked source hashes. Protected paths stay out.",
     ]

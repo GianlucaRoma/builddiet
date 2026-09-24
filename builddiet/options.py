@@ -1,4 +1,4 @@
-"""The three reclaim options: LEGGERO / NORMALE / ESTREMO.
+"""The three reclaim options: LIGHT / NORMAL / EXTREME.
 
 The user never says how many GB to delete. BuildDiet computes, from what is
 proven, three nested options and presents them.
@@ -7,16 +7,16 @@ How an item is placed: by the measured cost of getting *that item* back.
 Only byte-identical PROVEN items are considered (the same rule as `reclaim`
 and `watch`), and never protected or excluded ones.
 
-    LEGGERO  restore copies bytes that already exist (identical copy, archive,
+    LIGHT  restore copies bytes that already exist (identical copy, archive,
              git), or the item's measured rebuild time is <= light_max (1s)
-    NORMALE  the item's measured rebuild time is <= normal_max (5m)
-    ESTREMO  every PROVEN item, whatever its rebuild time
+    NORMAL  the item's measured rebuild time is <= normal_max (5m)
+    EXTREME  every PROVEN item, whatever its rebuild time
 
-The options are cumulative: LEGGERO ⊆ NORMALE ⊆ ESTREMO. Each option is
+The options are cumulative: LIGHT ⊆ NORMAL ⊆ EXTREME. Each option is
 jointly verified per project: all of its items are removed together in a
 sandbox and must come back byte-for-byte. If that fails, the option is
 retried without one item at a time (smallest first), up to max_attempts;
-dropped items are reported. NORMALE is the recommended option.
+dropped items are reported. NORMAL is the recommended option.
 """
 
 from __future__ import annotations
@@ -27,12 +27,12 @@ from typing import Callable, Optional
 
 from .planner import Attempt, JointCheck, Plan, PlanSearch, collect_items
 
-LIGHT, NORMAL, EXTREME = "LEGGERO", "NORMALE", "ESTREMO"
+LIGHT, NORMAL, EXTREME = "LIGHT", "NORMAL", "EXTREME"
 ORDER = (LIGHT, NORMAL, EXTREME)
 ALIASES = {
-    "leggero": LIGHT, "light": LIGHT, "1": LIGHT,
-    "normale": NORMAL, "normal": NORMAL, "2": NORMAL,
-    "estremo": EXTREME, "extreme": EXTREME, "3": EXTREME,
+    "light": LIGHT, "1": LIGHT,
+    "normal": NORMAL, "2": NORMAL,
+    "extreme": EXTREME, "3": EXTREME,
 }
 RESTORE_BY_COPY = ("duplicate", "archive", "git")
 

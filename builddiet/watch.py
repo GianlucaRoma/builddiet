@@ -4,12 +4,12 @@ Every cycle:
 
     free >= prepare_below   keep the "market" of proofs up to date (analyze new or
                             stale workspaces while there is room for a sandbox)
-    free <  prepare_below   compute the three JOINTLY VERIFIED options (LEGGERO /
-                            NORMALE / ESTREMO) and the one to propose: the smallest
-                            that gets back to keep_free (LEGGERO or NORMALE)
+    free <  prepare_below   compute the three JOINTLY VERIFIED options (LIGHT /
+                            NORMAL / EXTREME) and the one to propose: the smallest
+                            that gets back to keep_free (LIGHT or NORMAL)
     free <  reclaim_below   offer it (dialog / terminal), or reclaim it with --auto
-                            if it is not above --auto-max (default NORMALE)
-    free <  aggressive_below  ESTREMO may be proposed too
+                            if it is not above --auto-max (default NORMAL)
+    free <  aggressive_below  EXTREME may be proposed too
 
 Sandboxes go to the local drive with the most free space (or --sandbox-dir),
 so verification still works when the watched drive is nearly full.
@@ -46,10 +46,10 @@ class WatchSettings:
     reclaim_below: float = 10.0
     aggressive_below: float = 5.0
     keep_free: float = 20.0  # percent free to get back to
-    light_max: float = 1.0  # LEGGERO / NORMALE boundary (see options.py)
-    normal_max: float = 300.0  # NORMALE / ESTREMO boundary
+    light_max: float = 1.0  # LIGHT / NORMAL boundary (see options.py)
+    normal_max: float = 300.0  # NORMAL / EXTREME boundary
     auto: bool = False
-    auto_max: str = "NORMALE"  # --auto never reclaims a bigger option than this
+    auto_max: str = "NORMAL"  # --auto never reclaims a bigger option than this
     allow_recipes: bool = False  # run discovered recipes unattended (sandbox only)
     agent_logs: bool = False
     min_size: int = 100_000_000
@@ -214,7 +214,7 @@ def cycle(root: Path, s: WatchSettings, *, usage: Callable = shutil.disk_usage,
         if go is None and (interactive if interactive is not None else sys.stdin.isatty()):
             try:
                 go = input(f"Reclaim {chosen.name} ({format_size(chosen.freed)}) now? [y/N] ").strip().lower() \
-                    in ("y", "yes", "s", "si")
+                    in ("y", "yes")
             except EOFError:
                 go = False
     if not go:

@@ -1,31 +1,27 @@
-# Pubblicare BuildDiet e attivare il sito
+# Publishing BuildDiet
 
-Il repository GitHub esiste già: `GianlucaRoma/builddiet`. Non occorre crearne un altro né aprire un'organizzazione. La cartella locale è collegata a `origin` sul ramo `main`.
+The repository is [GianlucaRoma/builddiet](https://github.com/GianlucaRoma/builddiet). Its GitHub Pages site is [gianlucaroma.github.io/builddiet](https://gianlucaroma.github.io/builddiet/), published from `main` → `/docs`.
 
-## 1. Caricare il codice
+## Update the code or website
 
-Dopo aver controllato le modifiche locali, dalla cartella del progetto:
+From a checkout of this repository:
 
 ```bash
-cd builddiet
 git status
+git add -A
+git diff --cached --check
+git commit -m "Describe the change"
 git push origin main
 ```
 
-Se Git chiede di autenticarsi, completa l'accesso al tuo account GitHub. Non creare ancora una release: il workflow `publish.yml` tenta di pubblicare su PyPI quando viene pubblicata una GitHub Release.
+Review the staged files before committing. Changes to `docs/index.html` trigger a Pages rebuild; the result may take a few minutes to appear. Keep the repository homepage set to `https://gianlucaroma.github.io/builddiet/` so GitHub's website link opens the site.
 
-## 2. Rendere pubblico il repository
+## Before a release
 
-Controlla prima che codice, documenti e cronologia Git non contengano dati che vuoi tenere privati. Poi apri `https://github.com/GianlucaRoma/builddiet` e vai in **Settings → General → Danger Zone → Change repository visibility → Public**. La cronologia Git diventerà visibile insieme ai file attuali.
+Run the test suite and check the [GitHub Actions matrix](https://github.com/GianlucaRoma/builddiet/actions) for Windows, macOS and Linux. Review the source and Git history for personal information and credentials. Avoid committing local configuration, `.env` files or generated data. Use a GitHub `noreply` address for commit authorship if you want to keep your personal email out of new commits.
 
-Per GitHub Free, [GitHub Pages richiede un repository pubblico](https://docs.github.com/en/pages/getting-started-with-github-pages/creating-a-github-pages-site). Con GitHub Pro/Team/Enterprise si può usare anche un repository privato, ma il sito Pages resta pubblicamente accessibile.
+Publishing a GitHub Release activates `.github/workflows/publish.yml`, which attempts to publish to PyPI. A normal push to `main` does not publish to PyPI.
 
-## 3. Attivare GitHub Pages
+## GitHub organization
 
-Nel repository apri **Settings → Pages**. In **Build and deployment**, scegli **Deploy from a branch**, poi **main** e **/docs**, quindi **Save**. La pagina iniziale è `docs/index.html`. GitHub pubblicherà il sito all'indirizzo `https://gianlucaroma.github.io/builddiet/` quando il deployment sarà riuscito; controlla lo stato nella stessa pagina o in **Actions**.
-
-Questi sono i [passaggi ufficiali per scegliere la sorgente di pubblicazione](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site). Le modifiche successive a `docs/` sul ramo `main` aggiorneranno il sito.
-
-## Organizzazione GitHub?
-
-Per ora resta su `GianlucaRoma/builddiet`. Un'organizzazione serve se in futuro vuoi un'identità di team, più repository o una gestione condivisa degli accessi. Non migliora il funzionamento di BuildDiet né è necessaria per Pages.
+The existing personal repository is sufficient. An organization is useful only if you later need a team identity, several projects or shared access management.

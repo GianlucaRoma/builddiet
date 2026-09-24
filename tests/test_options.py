@@ -1,4 +1,4 @@
-"""LEGGERO / NORMALE / ESTREMO, and explicit out-of-space handling."""
+"""LIGHT / NORMAL / EXTREME, and explicit out-of-space handling."""
 
 import errno
 import io
@@ -125,14 +125,14 @@ class OptionsEndToEnd(unittest.TestCase):
         code, text = self.cli("plan", str(self.root), "--sandbox-dir", str(self.sb), "--normal-max", "1s",
                               "--light-max", "0.5s")
         self.assertEqual(code, 0, text)
-        for word in ("LEGGERO", "NORMALE", "ESTREMO", "<- recommended", "joint verification", "PASS",
+        for word in ("LIGHT", "NORMAL", "EXTREME", "<- recommended", "joint verification", "PASS",
                      "How an item is placed", "rebuild <= 1s"):
             self.assertIn(word, text)
         code, js = self.cli("plan", str(self.root), "--sandbox-dir", str(self.sb), "--json",
                             "--normal-max", "1s", "--light-max", "0.5s")
         options = {o["name"]: o for o in json.loads(js)["options"]}
-        self.assertIn("heavy", {i["path"] for i in options["ESTREMO"]["items"]})  # slow.py: ~1.5s
-        self.assertNotIn("heavy", {i["path"] for i in options["NORMALE"]["items"]})
+        self.assertIn("heavy", {i["path"] for i in options["EXTREME"]["items"]})  # slow.py: ~1.5s
+        self.assertNotIn("heavy", {i["path"] for i in options["NORMAL"]["items"]})
 
     def test_reclaim_requires_a_choice(self):
         with mock.patch("builddiet.cli.sys.stdin", io.StringIO()):  # non-interactive, whatever runs the tests
@@ -142,12 +142,12 @@ class OptionsEndToEnd(unittest.TestCase):
         self.assertTrue((self.root / "out").exists())
 
     def test_reclaim_option_and_restore(self):
-        code, text = self.cli("reclaim", str(self.root), "--option", "leggero", "--yes",
+        code, text = self.cli("reclaim", str(self.root), "--option", "light", "--yes",
                               "--sandbox-dir", str(self.sb), "--light-max", "0")
         self.assertEqual(code, 0, text)
-        self.assertIn("LEGGERO: freed", text)
-        self.assertFalse((self.root / "models").exists())  # a copy: LEGGERO
-        self.assertTrue((self.root / "out").exists())  # a recipe: not LEGGERO with --light-max 0
+        self.assertIn("LIGHT: freed", text)
+        self.assertFalse((self.root / "models").exists())  # a copy: LIGHT
+        self.assertTrue((self.root / "out").exists())  # a recipe: not LIGHT with --light-max 0
         self.assertEqual(reclaim.restore(self.root).failed, [])
         self.assertTrue((self.root / "models").exists())
 
@@ -161,7 +161,7 @@ class OptionsEndToEnd(unittest.TestCase):
                               "--sandbox-dir", str(self.sb))
         self.assertEqual(code, 0, text)
         self.assertIn("2 projects analyzed", text)
-        self.assertIn("LEGGERO", text)
+        self.assertIn("LIGHT", text)
         self.assertIn("builddiet reclaim", text)
 
     def test_protected_path_is_listed_and_left_out(self):

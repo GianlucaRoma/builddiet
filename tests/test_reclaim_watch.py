@@ -180,19 +180,19 @@ class WatchTest(Base):
         restored = reclaim.restore(self.root)
         self.assertEqual(restored.failed, [])
 
-    def test_auto_max_leggero_reclaims_only_copies(self):
-        # light_max=0: only items restored by copying existing bytes are LEGGERO
-        # a tiny need (keep_free just above 8%): LEGGERO is enough, so LEGGERO is proposed
-        r = self.run_cycle(8, auto=True, auto_max="LEGGERO", light_max=0.0, keep_free=8.0000001)
+    def test_auto_max_light_reclaims_only_copies(self):
+        # light_max=0: only items restored by copying existing bytes are LIGHT
+        # a tiny need (keep_free just above 8%): LIGHT is enough, so LIGHT is proposed
+        r = self.run_cycle(8, auto=True, auto_max="LIGHT", light_max=0.0, keep_free=8.0000001)
         remaining = {p for p in self.proven if (self.root / p).exists()}
-        self.assertEqual(remaining, {"out"})  # the recipe-made output is NORMALE
-        self.assertEqual(r.option, "LEGGERO")
+        self.assertEqual(remaining, {"out"})  # the recipe-made output is NORMAL
+        self.assertEqual(r.option, "LIGHT")
 
     def test_auto_does_not_exceed_auto_max(self):
-        # needs far more than LEGGERO frees, so NORMALE is proposed; --auto-max LEGGERO must ask
-        r = self.run_cycle(8, auto=True, auto_max="LEGGERO", light_max=0.0, keep_free=99.0,
+        # needs far more than LIGHT frees, so NORMAL is proposed; --auto-max LIGHT must ask
+        r = self.run_cycle(8, auto=True, auto_max="LIGHT", light_max=0.0, keep_free=99.0,
                            prepare_below=99.0)
-        self.assertEqual(r.option, "NORMALE")
+        self.assertEqual(r.option, "NORMAL")
         self.assertEqual(r.reclaimed, 0)
         for p in self.proven:
             self.assertTrue((self.root / p).exists())

@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.2.0 (unreleased)
+
+* Show reclaim options as LIGHT, NORMAL and EXTREME in the CLI, website and documentation. The previous Italian option names are no longer accepted as command arguments.
+* Explain the project workflow with a visual sample chart and simpler setup steps on the GitHub Pages site. The comparison with other tools remains in the README rather than on the site.
+* Use the repository owner's existing GitHub `noreply` address for new local commits and remove the local home path from the publishing guide.
+
+## 0.1.0 (2026-09-24)
 
 First public version.
 
@@ -19,12 +25,12 @@ First public version.
   * **Level 1** discovers recipes from scripts, Makefiles, lockfiles, README/AGENTS.md/CI and, opt-in, Codex / Claude Code session logs. It shows them for approval, refuses dangerous commands, and proves a candidate only if a recipe recreates it byte-for-byte without changing any other existing file.
 * **Level 2** (optional, `builddiet init`): a declared build + verify workflow, with REQUIRED / PROVEN / STALE / NOT REGENERATED verdicts.
 * **STALE** verdict: a deterministic regeneration that differs from the user's copy is never planned.
-* **Three options instead of an amount.** `analyze <folder>` / `plan <folder>` show **LEGGERO / NORMALE / ESTREMO**:
-  * LEGGERO: restore by copy, or rebuild ≤ 1s;
-  * NORMALE (recommended): rebuild ≤ 5m;
-  * ESTREMO: everything proven.
+* **Three options instead of an amount.** `analyze <folder>` / `plan <folder>` show **LIGHT / NORMAL / EXTREME**:
+  * LIGHT: restore by copy, or rebuild ≤ 1s;
+  * NORMAL (recommended): rebuild ≤ 5m;
+  * EXTREME: everything proven.
 
-  Each option is jointly verified, with space, measured rebuild, item types and left-out items. `reclaim` lets you choose one and confirm; `watch` proposes the smallest sufficient one (`--auto` up to `--auto-max`, default NORMALE). The boundaries are documented and adjustable.
+  Each option is jointly verified, with space, measured rebuild, item types and left-out items. `reclaim` lets you choose one and confirm; `watch` proposes the smallest sufficient one (`--auto` up to `--auto-max`, default NORMAL). The boundaries are documented and adjustable.
 * Out-of-space during verification is an explicit, safe error (`OutOfSpace`). `reclaim` writes each restore record before deleting.
 * Tests run in an isolated test area on the drive with the most free space, and refuse to start without 1 GB free. The earlier intermittent failure was an external process filling C: to 0 MB; see [docs/TEST-ISOLATION.md](docs/TEST-ISOLATION.md).
 * Advanced / CI: `plan --free SIZE`: an exact min-cost covering knapsack, then **joint verification**: the whole candidate plan is removed in a sandbox and must come back byte-for-byte. Otherwise the next plan is tried.

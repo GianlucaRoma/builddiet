@@ -28,7 +28,7 @@ BUILDDIET_HOME="$BD_MAC_BASE/home" python3 -m builddiet analyze "$BD_MAC_BASE/wo
   --sandbox-dir "$BD_MAC_BASE/sandboxes" --yes
 python3 benchmarks/bd_zero/check.py "$BD_MAC_BASE"
 BUILDDIET_HOME="$BD_MAC_BASE/home" python3 -m builddiet reclaim "$BD_MAC_BASE/workspace" \
-  --option normale --yes --sandbox-dir "$BD_MAC_BASE/sandboxes"
+  --option normal --yes --sandbox-dir "$BD_MAC_BASE/sandboxes"
 BUILDDIET_HOME="$BD_MAC_BASE/home" python3 -m builddiet restore "$BD_MAC_BASE/workspace"
 ```
 
