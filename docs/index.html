@@ -6,7 +6,8 @@
   <meta name="color-scheme" content="dark">
   <meta name="description" content="BuildDiet checks what a developer project can recover before offering to reclaim disk space.">
   <title>BuildDiet — Know what can come back</title>
-  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="icon" type="image/png" href="builddiet-icon.png">
+  <link rel="apple-touch-icon" href="builddiet-icon.png">
   <style>
     :root { color-scheme: dark; --bg:#090b12; --panel:#111823; --panel2:#17202d; --line:#2a3848; --text:#f1f7fb; --muted:#afc1ce; --cyan:#77e4f2; --pink:#ff72c6; }
     * { box-sizing:border-box; }
@@ -18,11 +19,14 @@
     header { border-bottom:1px solid var(--line); }
     .nav { display:flex; justify-content:space-between; align-items:center; gap:1rem; min-height:4.5rem; }
     .brand { display:inline-flex; align-items:center; gap:.65rem; font-weight:800; font-size:1.08rem; text-decoration:none; letter-spacing:-.025em; }
-    .brand-mark { display:inline-grid; place-items:center; width:2rem; height:2rem; border:2px solid var(--cyan); border-radius:.45rem; color:var(--pink); font-size:1.15rem; line-height:1; }
+    .brand-mark { display:block; width:2.6rem; height:2.6rem; object-fit:cover; border-radius:.55rem; }
     nav { display:flex; gap:1.25rem; align-items:center; }
     nav a { text-decoration:none; color:var(--muted); font-size:.94rem; }
     nav a:hover { color:var(--text); }
     .hero { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(300px,.9fr); gap:clamp(2rem,6vw,5rem); align-items:center; padding:clamp(4rem,8vw,7.5rem) 0; }
+    .hero-identity { display:flex; align-items:center; gap:1.2rem; margin-bottom:1.5rem; }
+    .hero-identity .eyebrow { margin:0; }
+    .hero-mascot { display:block; width:6rem; height:6rem; flex:none; object-fit:cover; border-radius:1.1rem; }
     .eyebrow { color:var(--cyan); text-transform:uppercase; letter-spacing:.14em; font-weight:750; font-size:.78rem; margin:0 0 1.15rem; }
     h1,h2,h3,p { margin-top:0; }
     h1 { max-width:11ch; font-size:clamp(3.15rem,7vw,6.25rem); line-height:1.02; letter-spacing:-.065em; margin-bottom:1.5rem; }
@@ -88,14 +92,14 @@
     footer a { color:var(--text); }
     @media (max-width:900px) { .hero,.proof,.chart-layout { grid-template-columns:1fr; } .setup-grid { grid-template-columns:1fr; } .setup-step p { min-height:0; } }
     @media (max-width:800px) { .hero { padding:4rem 0; } .grid { grid-template-columns:1fr; } h1 { max-width:13ch; } }
-    @media (max-width:520px) { .wrap { width:min(100% - 1.5rem,1120px); } nav a:first-child { display:none; } .hero { gap:2rem; } pre { font-size:.76rem; } .ledger-row { grid-template-columns:1fr; gap:.15rem; } .chart-row { grid-template-columns:4.7rem minmax(0,1fr) 4rem; gap:.4rem; } }
+    @media (max-width:520px) { .wrap { width:min(100% - 1.5rem,1120px); } nav a:first-child { display:none; } .hero { gap:2rem; } .hero-mascot { width:4.8rem; height:4.8rem; } pre { font-size:.76rem; } .ledger-row { grid-template-columns:1fr; gap:.15rem; } .chart-row { grid-template-columns:4.7rem minmax(0,1fr) 4rem; gap:.4rem; } }
     @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } .button:hover { transform:none; } }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap nav">
-      <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true">B</span> BuildDiet</a>
+      <a class="brand" href="#top"><img class="brand-mark" src="builddiet-icon.png" alt="" width="42" height="42"> BuildDiet</a>
       <nav aria-label="Main navigation">
         <a href="#how">How it works</a>
         <a href="#limits">Limits</a>
@@ -106,7 +110,7 @@
   <main id="top">
     <div class="wrap hero">
       <div>
-        <p class="eyebrow">Open-source developer tool · Beta</p>
+        <div class="hero-identity"><img class="hero-mascot" src="builddiet-icon.png" alt="" width="96" height="96"><p class="eyebrow">Open-source developer tool · Beta</p></div>
         <h1>Free space. <em>Keep certainty.</em></h1>
         <p class="lead">BuildDiet tests whether project files can be recovered before offering to remove them. See how much space you could free and what rebuilding would cost.</p>
         <p class="hero-note">No proof of recovery? The file stays.</p>
